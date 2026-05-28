@@ -1,0 +1,13 @@
+# ========================================
+# LiDAR 内参配置 - lidar1
+# ========================================
+#
+# MT-MLXS: 基于 ZVISION ML-Xs 的自定义固态 LiDAR 配置
+#   - 原型: ZVISION ML-Xs (123°×32°, 108K pts, 250m)
+#   - 改动: fireTimeNs 置零 (单帧全量), 1/4 点密度 (27K pts/frame)
+#   - 详细说明见 docs/lidar_guide.md
+
+model: rtx_lidar
+
+# 自定义 JSON 配置 (需对应 USD 文件, 见 docs/lidar_guide.md)
+config_name: "lidar_configs/json/MT_MLXS.json"

@@ -1,0 +1,54 @@
+Panels:
+  - Class: rviz/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz/Grid
+      Name: Grid
+      Plane Cell Count: 50
+      Reference Frame: map
+      Value: true
+
+    - Class: rviz/TF
+      Name: TF
+      Value: true
+
+    - Class: rviz/Odometry
+      Name: Odometry
+      Topic: /state_estimation
+      Value: true
+      Keep: 100
+
+    - Class: rviz/PointCloud2
+      Name: PointCloud
+      Topic: /registered_scan
+      Value: true
+      Size (Pixels): 2
+      Color Transformer: AxisColor
+      Axis: Z
+      Decay Time: 0
+
+    - Class: rviz/Path
+      Name: LocalPath
+      Topic: /local_path
+      Value: true
+      Color: 0; 255; 0
+
+  Global Options:
+    Fixed Frame: map
+    Frame Rate: 30
+  Name: root
+  Views:
+    Current:
+      Class: rviz/Orbit
+      Name: Current View
+      Distance: 15
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0
+      Pitch: 0.5
+      Yaw: 3.14
+      Value: Orbit (rviz)
+    Saved: ~

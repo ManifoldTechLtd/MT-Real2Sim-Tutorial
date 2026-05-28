@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Isaac Sim
+lut_cache/
+*.log
+_isaac_sim/
+
+# ROS build artifacts
+ros1_ws/build/
+ros1_ws/devel/
+ros1_ws/install/
+ros1_ws/logs/
+ros1_ws/.catkin_workspace
+
+# Docker
+docker/.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data / outputs
+output/
+*.ply
+*.usdz
+*.usd
+!lidar_configs/usd/MT_MLXS.usd
+
+# Debug
+*.log
+debug_*.png
+
+# Windsurf
+.windsurf/

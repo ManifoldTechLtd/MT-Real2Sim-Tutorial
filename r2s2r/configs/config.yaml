@@ -1,0 +1,70 @@
+# ========================================
+# Isaac Real2Sim2Real — 统一仿真配置
+# ========================================
+# 切换机器人只需修改 quadruped.robot_type
+# 支持: spot, go2
+
+# 仿真引擎设置
+simulation:
+  headless: false
+  render_opt:
+    enabled: true
+    reflections: false
+    translucency: false
+    indirect_diffuse: false
+    shadows: false
+    ambient_occlusion: false
+
+# 场景配置
+scene:
+  environment:
+    enabled: true
+    usdz_path: "~/dataset/isaac/thirdfloor_rest.usdz"
+    position: [0.0, 0.0, 0.0]
+    orientation: [0.0, 0.0, 0.0]
+    scale: [1.0, 1.0, 1.0]
+    add_collision: true
+
+  use_default_ground: false
+  ground_z_offset: 0.0
+
+  # 物理碰撞优化
+  physics:
+    collision_approximation: "meshSimplification"
+    contact_offset: 0.08
+    rest_offset: 0.01
+
+# 四足机器人配置
+# 切换机器人只需修改 robot_type, 其余自动适配
+quadruped:
+  robot_type: "go2"                        # spot | go2
+  prim_path: "/World/Quadruped"
+  position: [0.0, 0.0, 0.9]              # Go2 初始位姿
+
+# 光照配置 (室内场景优化)
+lighting:
+  dome_intensity: 1000.0
+  distant_intensity: 800.0
+  distant_rotation: [-80, 0, 0]
+
+# 传感器套件
+# 从 calibration/ 目录读取内外参, 创建 Camera + LiDAR + IMU
+sensor_suite:
+  enabled: true
+  calibration_dir: "calibration/pinhole"
+
+# TCP 桥接配置
+bridge:
+  host: "0.0.0.0"
+  port: 9090
+  pose_rate: 50       # Hz
+  pointcloud_rate: 5  # Hz (降低以减小 RViz 延迟)
+  image_rate: 10      # Hz — Camera 图像 (JPEG 压缩)
+  image_quality: 80   # JPEG 质量 (1-100, 越低越小)
+  imu_rate: 50        # Hz — IMU 加速度/角速度
+
+# 手动控制参数 (WASD)
+control:
+  linear_speed: 1.5
+  lateral_speed: 1.0
+  yaw_speed: 1.5

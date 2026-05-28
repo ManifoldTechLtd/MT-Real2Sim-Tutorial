@@ -1,0 +1,11 @@
+<launch>
+  <!-- TCP Bridge: Isaac Sim → ROS1 -->
+  <arg name="tcp_host" default="localhost"/>
+  <arg name="tcp_port" default="9090"/>
+
+  <node pkg="sim_bridge" type="bridge_node.py" name="sim_bridge" output="screen">
+    <param name="tcp_host" value="$(arg tcp_host)"/>
+    <param name="tcp_port" value="$(arg tcp_port)"/>
+    <param name="reconnect_interval" value="2.0"/>
+  </node>
+</launch>
