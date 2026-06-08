@@ -1,8 +1,22 @@
 # MT Real2Sim Tutorial
 
+<p align="center">
+  <img src="asset/display/mt_r2st_logo.jpg" alt="Real2Sim Tutorial Logo" height="80">
+</p>
+
+<p align="center">
+  <img src="asset/display/mt_r2s.gif" alt="Real2Sim Tutorial — Isaac Sim + ROS1 导航演示" width="100%">
+</p>
+
 [English](README.md)
 
 Isaac Sim 5.1 仿真 ↔ ROS1 Noetic 真机统一算法框架。仿真与真机使用相同的 ROS1 接口和算法代码，零修改部署。
+
+## 关于留形科技
+
+[留形科技](https://manifoldtech.cn)专注于空间智能基础设施建设，核心方向包括三维重建、场景理解和具身智能——打通真实世界采集与交互式仿真之间的桥梁。
+
+留形科技的硬件产品——包括 **Q9000**、**Pocket 2 / 2 Pro** 和 **Odin 1**——可对真实环境进行高质量三维扫描。扫描生成的场景可直接导入 Isaac Sim 作为仿真环境，实现从真实到仿真 (Real-to-Sim) 的无缝衔接，用于机器人导航与自主探索。
 
 ## 系统架构
 

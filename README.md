@@ -1,8 +1,22 @@
 # MT Real2Sim Tutorial
 
+<p align="center">
+  <img src="asset/display/mt_r2st_logo.jpg" alt="Real2Sim Tutorial Logo" height="80">
+</p>
+
+<p align="center">
+  <img src="asset/display/mt_r2s.gif" alt="Real2Sim Tutorial — Isaac Sim + ROS1 navigation demo" width="100%">
+</p>
+
 [简体中文](README_cn.md)
 
 Unified simulation ↔ real-robot algorithm framework built on Isaac Sim 5.1 and ROS1 Noetic. Simulation and physical deployment share the same ROS1 interfaces and algorithm code — zero modifications needed.
+
+## About Manifold Tech
+
+[Manifold Tech Ltd.](https://manifoldtech.cn) builds tools and infrastructure for spatial intelligence. We focus on 3D reconstruction, scene understanding, and embodied AI — bridging the gap between real-world capture and interactive simulation.
+
+Manifold Tech's hardware products — including the **Q9000**, **Pocket 2 / 2 Pro**, and **Odin 1** — can capture high-quality 3D models of real-world environments. These scanned scenes can be imported directly into Isaac Sim as simulation environments, enabling seamless Real-to-Sim transfer for robot navigation and autonomous exploration.
 
 ## Architecture
 
