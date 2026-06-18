@@ -13,12 +13,10 @@ Usage:
 Based on NVIDIA 3DGUT export pipeline (Apache 2.0 License).
 """
 
-import argparse
 import gzip
 import io
 import logging
 import os
-import sys
 import tempfile
 import zipfile
 from pathlib import Path
@@ -555,45 +553,3 @@ def convert_ply_to_usdz(input_ply: str, output_usdz: str, max_sh_degree: int = 3
     logger.info("Done!")
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Convert gsplat PLY to NuRec USDZ for Isaac Sim",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-    python gsplat_ply_to_usdz.py point_cloud.ply -o scene.usdz
-    python gsplat_ply_to_usdz.py point_cloud.ply -o scene.usdz --max-sh-degree 3
-""",
-    )
-    parser.add_argument("input", type=str, help="Input PLY file (standard 3DGS format)")
-    parser.add_argument("-o", "--output", type=str, default=None,
-                        help="Output USDZ path (default: same name as input with .usdz)")
-    parser.add_argument("--max-sh-degree", type=int, default=3,
-                        help="Max SH degree to load (default: 3)")
-    parser.add_argument("--is-2dgs", action="store_true", help="Force 2DGS rendering mode")
-    parser.add_argument("--scale-offset", type=float, default=0.0,
-                        help="Log-scale offset to apply (e.g. ln(2.2272) = 0.8008)")
-    parser.add_argument("--max-dist", type=float, default=0.0,
-                        help="Remove Gaussians farther than this distance from origin "
-                             "(0 = no filter). Useful for Q9000 shell removal (e.g. 20).")
-    parser.add_argument("--export-filtered-ply", type=str, default=None,
-                        help="Save the distance-filtered PLY to this path (requires --max-dist > 0).")
-    parser.add_argument("--y-up", action="store_true",
-                        help="Input PLY is Y-up; convert to Z-up before export")
-    args = parser.parse_args()
-
-    input_path = Path(args.input)
-    if not input_path.exists():
-        logger.error(f"Input not found: {input_path}")
-        sys.exit(1)
-
-    output = args.output or str(input_path.with_suffix(".usdz"))
-
-    convert_ply_to_usdz(str(input_path), output, max_sh_degree=args.max_sh_degree,
-                        is_2dgs=args.is_2dgs, scale_offset=args.scale_offset,
-                        max_dist=args.max_dist, export_filtered_ply=args.export_filtered_ply,
-                        y_up=args.y_up)
-
-
-if __name__ == "__main__":
-    main()
