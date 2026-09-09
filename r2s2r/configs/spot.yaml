@@ -1,0 +1,61 @@
+# ========================================
+# Isaac Real2Sim2Real — Spot 仿真配置
+# ========================================
+# 用于快速验证 TCP 桥接 + ROS1 流水线
+
+simulation:
+  headless: false
+  render_opt:
+    enabled: true
+    reflections: false
+    translucency: false
+    indirect_diffuse: false
+    shadows: false
+    ambient_occlusion: false
+
+scene:
+  environment:
+    enabled: true
+    usdz_path: "/home/yu/code_tunnelinspection/tunnel-inspection-v2/dataset/tunnel1.usdz"
+    position: [0.0, 0.0, 0.0]
+    orientation: [0.0, 0.0, 0.0]
+    scale: [1.0, 1.0, 1.0]
+    add_collision: true
+
+  use_default_ground: false
+  ground_z_offset: 0.0
+
+  physics:
+    collision_approximation: "meshSimplification"
+    contact_offset: 0.08
+    rest_offset: 0.01
+
+quadruped:
+  robot_type: "spot"
+  prim_path: "/World/Quadruped"
+  position: [-10.0, -60.0, 0.4]
+
+lighting:
+  dome_intensity: 1000.0
+  distant_intensity: 800.0
+  distant_rotation: [-80, 0, 0]
+
+sensor_suite:
+  enabled: true
+  calibration_dir: "calibration/pinhole"
+
+# TCP 桥接配置
+bridge:
+  host: "0.0.0.0"
+  port: 9090
+  pose_rate: 50       # Hz
+  pointcloud_rate: 5  # Hz (降低以减小 RViz 延迟)
+  image_rate: 10      # Hz — Camera 图像 (JPEG 压缩)
+  image_quality: 80   # JPEG 质量 (1-100, 越低越小)
+  imu_rate: 50        # Hz — IMU 加速度/角速度
+
+# 手动控制参数 (调试用, WASD)
+control:
+  linear_speed: 3.0
+  lateral_speed: 3.0
+  yaw_speed: 3.0

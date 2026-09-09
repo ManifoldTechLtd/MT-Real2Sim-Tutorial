@@ -1,0 +1,36 @@
+# ========================================
+# 四足机器人传感器套件外参配置 (分层格式)
+# ========================================
+#
+# 约定:
+#   translation: [x, y, z] 单位: 米
+#   rotation: [w, x, y, z] 四元数 (Hamilton, scalar-first)
+#
+# 层级结构:
+#   ref_imu (rimu) 定义套件安装变换 T_body_rimu
+#   sensors 中各传感器 extrinsics 为 T_rimu_sensor
+
+# 参考 IMU (rimu) — 套件安装基准
+ref_imu:
+  name: imu_center
+  frequency: 200
+  # T_body_rimu: 安装变换 (含仿真 z 偏移 0.20m)
+  mount_extrinsics:
+    translation: [0.0, 0.0, 0.50]
+    rotation: [1.0, 0.0, 0.0, 0.0]
+
+# 其余传感器，extrinsics 均为 T_rimu_sensor (相对于 ref_imu)
+sensors:
+  camera1:
+    type: camera
+    intrinsics_file: "intrinsics_camera1.yaml"
+    extrinsics:                              # T_rimu_camera1
+      translation: [0.3, 0.0, 0.1]          # rimu 前方, 略高于 rimu
+      rotation: [0.9961947, 0.0, -0.0871557, 0.0]   # 绕 Y 轴旋转 -10 度 (略微朝下)
+
+  lidar1:
+    type: lidar
+    intrinsics_file: "intrinsics_lidar1.yaml"
+    extrinsics:                              # T_rimu_lidar1
+      translation: [0.0, 0.0, 0.3]          # rimu 上方 0.3m
+      rotation: [1.0, 0.0, 0.0, 0.0]

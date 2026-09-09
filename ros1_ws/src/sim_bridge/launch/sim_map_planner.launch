@@ -1,0 +1,215 @@
+<?xml version="1.0"?>
+<!--
+  V2 Phase 1 Step F: 仿真中跑 map_planner + goal_state_machine + NeuPAN
+  (从真机 k02_nav/ros_ws/src/map_planner/launch/whole.launch 拆出仿真专用版)
+
+  剥离的真机节点:
+    - chassis_control_rs232 / control_throttle     (真机底盘 RS232 驱动)
+    - pointcloud_filter / pc_to_scan               (sim_bridge 已发 /scan)
+    - bridge_detect / bridge_det_dino / cross_bridge / edge_walker
+                                                   (真机过桥流程; sim 走 NeuPAN 直接穿)
+    - odin1_to_base / odin1_to_footprint 静态 TF   (sim_bridge 已发 base_link/base_footprint)
+    - grid_mapper                                  (sim_grid_mapper.launch 已起 standalone 版)
+    - path_detect                                  (sim_perception.launch 已起)
+    - foxglove_bridge                              (sim 用 RViz)
+
+  数据流:
+    /scan_filtered ──→ NeuPAN ──→ /cmd_vel
+                       ↑
+    /map/whole ──→ map_planner A*/CHOMP ──→ /map_planner/optimized_path
+                                                 │
+                       /move_base_simple/goal ──→ goal_state_machine
+                                                 │
+                                                 └─→ atomic_move (近距 PID 精调)
+
+  注意:
+    1. NeuPAN 配置 (neupan_ros/scripts/configs/config.yaml) 默认 dune_checkpoint
+       指向 /mnt/data/code/... 真机路径, 仿真前必须改成容器可见路径, 详见
+       isaac_real2sim2real_go2/docs/Issacsim_docker_using.md "Step F 准备工作".
+    2. NeuPAN 默认订阅 /scan/360, 仿真要走 Step E 的 scan_filter, 需把 yaml 里
+       topic.scan 改成 /scan_filtered (否则 NeuPAN 会躲坡面, scan_filter 白做).
+    3. Step G 完成后, map_planner 默认订阅 /map/whole_traversable (融合栈桥/坡面后),
+       A* 主动穿过栈桥. 想退回 Step F 行为 (绕开栈桥) 把 arg map_whole_topic 改回
+       /map/whole 即可.
+
+  前置条件:
+    1. sim_bridge/bridge.launch         运行中 (TF + /registered_scan + /state_estimation)
+    2. sim_bridge/sim_grid_mapper.launch 运行中 (/scan + /map + /map/whole + /scan/360)
+    3. sim_bridge/sim_perception.launch  运行中 (path_detect + traversability + scan_filter
+                                                + passability_fuser → /map/whole_traversable)
+    4. /tools/setup_k02_overlay.sh       已编译 (map_planner / scan_filter / passability_fuser / 等)
+-->
+<launch>
+  <!-- Step G: map_planner 默认订阅 /map/whole_traversable.
+       回退到 Step F 把这个 default 改回 /map/whole. -->
+  <arg name="map_whole_topic" default="/map/whole_traversable"/>
+  <arg name="goal_topic"      default="/move_base_simple/goal"/>
+  <arg name="plan_service"    default="/map_planner/plan"/>
+  <arg name="get_map_service" default="/map_planner/get_map"/>
+  <arg name="nav_path_action" default="/neupan/nav_path"/>
+
+  <!-- 履带车 K02 几何 (与 r2s2r/configs/kinematic_car.yaml + neupan planner.yaml 一致) -->
+  <arg name="chassis_length"  default="1.04"/>
+  <arg name="chassis_width"   default="0.77"/>
+  <arg name="chassis_height"  default="0.30"/>
+  <arg name="lidar_height"    default="0.50"/>
+  <arg name="max_linear_vel"  default="0.5"/>
+  <arg name="max_angular_vel" default="0.5"/>
+
+  <!-- PID (与真机 whole.launch 默认值一致) -->
+  <arg name="pid_frequency"               default="100.0"/>
+  <arg name="pid_linear_kp"               default="0.7"/>
+  <arg name="pid_linear_ki"               default="0.0"/>
+  <arg name="pid_linear_kd"               default="0.1"/>
+  <arg name="pid_linear_tolerance"        default="0.05"/>
+  <arg name="pid_angular_kp"              default="1.5"/>
+  <arg name="pid_angular_ki"              default="0.0"/>
+  <arg name="pid_angular_kd"              default="0.2"/>
+  <arg name="pid_angular_tolerance"       default="0.02"/>
+  <arg name="pid_stuck_timeout"           default="99.0"/>
+  <arg name="pid_linear_stuck_tolerance"  default="0.01"/>
+  <arg name="pid_angular_stuck_tolerance" default="0.02"/>
+
+  <!-- map_planner 是 nodelet, 需要 manager -->
+  <node pkg="nodelet" type="nodelet" name="nodelet_manager" args="manager" output="screen"/>
+
+  <!-- Atomic Move: 近距 PID 精调 (仿真也保留, GSM 末段会用) -->
+  <node name="atomic_move" pkg="atomic_move" type="atomic_move_node" output="screen">
+    <remap from="cmd_vel" to="/cmd_vel"/>
+    <remap from="move"    to="/atomic_move/move"/>
+    <remap from="turn"    to="/atomic_move/turn"/>
+    <param name="odom_frame"        value="odom"/>
+    <param name="base_frame"        value="base_link"/>
+    <param name="control_frequency" value="$(arg pid_frequency)"/>
+    <param name="linear_kp"         value="$(arg pid_linear_kp)"/>
+    <param name="linear_ki"         value="$(arg pid_linear_ki)"/>
+    <param name="linear_kd"         value="$(arg pid_linear_kd)"/>
+    <param name="linear_max_vel"    value="$(arg max_linear_vel)"/>
+    <param name="linear_tolerance"  value="$(arg pid_linear_tolerance)"/>
+    <param name="angular_kp"        value="$(arg pid_angular_kp)"/>
+    <param name="angular_ki"        value="$(arg pid_angular_ki)"/>
+    <param name="angular_kd"        value="$(arg pid_angular_kd)"/>
+    <param name="angular_max_vel"   value="$(arg max_angular_vel)"/>
+    <param name="angular_tolerance" value="$(arg pid_angular_tolerance)"/>
+    <param name="stuck_timeout"           value="$(arg pid_stuck_timeout)"/>
+    <param name="linear_stuck_tolerance"  value="$(arg pid_linear_stuck_tolerance)"/>
+    <param name="angular_stuck_tolerance" value="$(arg pid_angular_stuck_tolerance)"/>
+  </node>
+
+  <!-- Map Planner: A* + CHOMP, 订阅 $(arg map_whole_topic) (Step G 后默认 /map/whole_traversable) -->
+  <node pkg="nodelet" type="nodelet" name="map_planner"
+        args="load map_planner/MapPlannerNodelet nodelet_manager" output="screen">
+    <param name="service_name"     value="$(arg plan_service)"/>
+    <param name="publish_path"     value="true"/>
+    <param name="planning_method"  value="astar"/>
+    <!-- Open-16 (2026-05-25): inflation chain double counting fix.
+         旧值 0.55 m (~5-6 cells @0.1m grid) 与上游 Open-13 walkable_unknown_boundary
+         (cells=3 = 0.30 m) 叠加, 桥侧悬崖→OUT_OCC 后再 inflate, 总 0.85 m
+         双侧吃掉 1.7 m. 桥宽 1.8 m → 走廊只剩 0.1 m, A* 全失败.
+         0.30 m = K02 半宽 0.25 + 5 cm 安全裕度. 配合 walkable_unknown_boundary_cells=2
+         总 inflation 0.5 m, 桥宽 1.8 m 剩 0.8 m 走廊够过.
+         **真机部署改回 0.55** (真机 K02 + 通道狭窄, 需更大裕度). -->
+    <param name="inflation_radius" value="0.30"/>
+    <param name="allow_unknown"    value="false"/>
+    <param name="unknown_inflate_radius" value="0.25"/>
+    <param name="path_radius"      value="3.0"/>
+
+    <!-- Open-17 (2026-05-25): proximity-weighted A*. Soft cost gradient over
+         FREE cells close to inflated OCC, pushing A* path to corridor
+         centerline rather than hugging boundary. 不影响可达性 — 比单纯增大
+         inflation_radius 更安全 (binary inflation 加大会重新堵窄桥, 已经在
+         Open-16 P1 痛点经历过).
+
+         proximity_weight: per-cell penalty 单位 = cell-step (1.0 ≈ 1 cell)
+                           sim 推荐 3.0 (= 走 1 个 inflation 边界 cell ≈ 走
+                           4 个中心 cell 的代价, 显著偏中线)
+                           weight=0 → 关闭, A* 行为与旧版完全一致
+         proximity_radius: soft-cost 范围 (m). 必须 > inflation_radius 才有
+                           soft 区间. sim 推荐 0.5 m (inflation 0.30 + soft
+                           0.20 m 软区).
+
+         **真机迁移**: 配合 inflation_radius=0.55, proximity_radius 改 0.75,
+         weight 改 2.0 (避免代价过高让 A* 在窄走廊 backtrack 出 dead-end).
+         真机如有 backtrack 现象先把 weight 降到 1.0. -->
+    <param name="proximity_weight" value="3.0"/>
+    <param name="proximity_radius" value="0.5"/>
+
+    <param name="chomp_alpha"      value="0.05"/>
+    <!-- Step G.10 (2026-05-19): 仿真桥面贴边掉桥修复. 旧值 obs=2.0 / eps=0.8 时,
+         桥宽 1.8-3 m 中央距两侧悬崖 0.9-1.5 m, **全在 epsilon=0.8 cost zone 之外**
+         → ESDF 梯度=0 → CHOMP 不往中心拉, 路径贴边掉桥.
+         epsilon=2.0 让两侧 cost zone 在桥宽 ≤4 m 范围内完全重叠, 中心梯度
+         指向自身. obs=3.0 ≥ smooth=3.0 保证避障与平滑等权.
+         注意: 仅本仿真 launch 改, k02_nav/whole.launch (真机 canonical default)
+         保持 obs=2.0/eps=0.8 不动. 真机部署直接用 whole.launch 即可. -->
+    <param name="chomp_obs"        value="3.0"/>
+    <param name="chomp_smooth"     value="3.0"/>
+    <param name="chomp_epsilon"    value="2.0"/>
+    <param name="chomp_iters"      value="150"/>
+    <remap from="map"                          to="$(arg map_whole_topic)"/>
+    <remap from="/move_base_simple/goal"       to="$(arg goal_topic)/none"/>
+    <remap from="/map_planner/a_star_path"     to="/map_planner/a_star_path"/>
+    <remap from="/map_planner/inflated_map"    to="/map/inflate"/>
+    <remap from="/map_planner/esdf_map"        to="/map/esdf"/>
+    <remap from="/map_planner/optimized_path"  to="/map_planner/optimized_path"/>
+    <remap from="/map_planner/get_map"         to="$(arg get_map_service)"/>
+  </node>
+
+  <!-- Goal State Machine: 接收目标点, 调用 map_planner 服务, 串联 NeuPAN 与 atomic_move -->
+  <node pkg="map_planner" type="goal_state_machine" name="goal_state_machine" output="screen">
+    <param name="plan_service"            value="$(arg plan_service)"/>
+    <param name="replan_tolerance"        value="3.0"/>
+    <param name="finetune_tolerance"      value="0.1"/>
+    <param name="finetune_yaw_tolerance"  value="10.0"/>
+    <param name="nav_path_action"         value="$(arg nav_path_action)"/>
+    <!-- task_name="" => 手动给目标 (RViz 2D Nav Goal 或 rostopic pub), 不加载 JSON 任务 -->
+    <param name="task_name" value=""/>
+    <remap from="/move_base_simple/goal" to="$(arg goal_topic)"/>
+    <remap from="set_goal" to="/gsm/set_goal"/>
+    <param name="linear_kp"        value="$(arg pid_linear_kp)"/>
+    <param name="linear_ki"        value="$(arg pid_linear_ki)"/>
+    <param name="linear_kd"        value="$(arg pid_linear_kd)"/>
+    <param name="linear_max_vel"   value="$(arg max_linear_vel)"/>
+    <param name="linear_tolerance" value="$(arg pid_linear_tolerance)"/>
+    <param name="angular_kp"       value="$(arg pid_angular_kp)"/>
+    <param name="angular_ki"       value="$(arg pid_angular_ki)"/>
+    <param name="angular_kd"       value="$(arg pid_angular_kd)"/>
+    <param name="angular_max_vel"  value="$(arg max_angular_vel)"/>
+    <param name="angular_tolerance" value="$(arg pid_angular_tolerance)"/>
+    <param name="control_frequency"          value="$(arg pid_frequency)"/>
+    <param name="stuck_timeout"              value="$(arg pid_stuck_timeout)"/>
+    <param name="linear_stuck_tolerance"     value="$(arg pid_linear_stuck_tolerance)"/>
+    <param name="angular_stuck_tolerance"    value="$(arg pid_angular_stuck_tolerance)"/>
+    <param name="pid_max_retries"     value="3"/>
+    <param name="require_user_input"  value="false"/>  <!-- sim 不要交互式确认 -->
+  </node>
+
+  <!-- NeuPAN: 局部端到端避障 + cmd_vel 输出 -->
+  <!-- 注意: NeuPAN 配置文件 (neupan_ros/scripts/configs/config.yaml) 是
+       hardcoded 路径, sim 启动前必须手工改 dune_checkpoint 与 topic.scan,
+       详见 docs/Issacsim_docker_using.md "Step F 准备工作" 章节. -->
+  <node pkg="neupan_ros" type="neupan_node.py" name="neupan_node" output="screen">
+    <remap from="/cmd_vel"        to="/cmd_vel"/>
+    <remap from="/initial_path"   to="/initial_path/none"/>
+    <remap from="/neupan/goal"    to="/neupan/goal"/>
+    <remap from="/neupan/stop"    to="/neupan/stop"/>
+    <remap from="/neupan/arrive"  to="/neupan/arrive"/>
+    <remap from="/neupan/nav"     to="/neupan/nav_goal"/>
+    <remap from="/neupan/nav_path" to="$(arg nav_path_action)"/>
+    <!-- Open-24 (2026-05-26): pre-rotation gate. 防止 NeuPAN MPC "边走边转"
+         在窄走廊/桥上撞墙. yaw_err > enter_deg → 原地旋转; 落到 exit_deg
+         以下 → 交回 NeuPAN. 滞回防 bang-bang. 真机可加大 enter_deg / 减小
+         omega 让动作更保守. enable=false 完全关闭. -->
+    <param name="pre_rotation_enable"      value="true"/>
+    <param name="pre_rotation_enter_deg"   value="120.0"/>
+    <param name="pre_rotation_exit_deg"    value="30.0"/>
+    <param name="pre_rotation_omega"       value="0.8"/>
+    <param name="pre_rotation_lookahead_m" value="1.0"/>
+    <!-- Open-24 v2 (2026-05-26): EXIT 后 lockout 防抖.
+         跑测发现 EXIT → 0.25s 内 lookahead 点跳变 (GSM A* replan / NeuPAN preempt
+         重设 initial_path) → 立即 ENTER 反方向, 机器人反复来回转.
+         lockout 期间不允许 ENTER, 让 NeuPAN 接管. 1.5s 足够 GSM/NeuPAN 收敛. -->
+    <param name="pre_rotation_exit_lockout_s" value="1.5"/>
+  </node>
+
+</launch>

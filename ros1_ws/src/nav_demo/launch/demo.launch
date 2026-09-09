@@ -1,0 +1,19 @@
+<launch>
+  <!-- Full demo: bridge + nav + rviz -->
+  <arg name="tcp_host" default="localhost"/>
+  <arg name="tcp_port" default="9090"/>
+  <arg name="rviz" default="true"/>
+
+  <!-- TCP Bridge -->
+  <include file="$(find sim_bridge)/launch/bridge.launch">
+    <arg name="tcp_host" value="$(arg tcp_host)"/>
+    <arg name="tcp_port" value="$(arg tcp_port)"/>
+  </include>
+
+  <!-- Navigation Algorithm -->
+  <include file="$(find nav_algo)/launch/nav_algo.launch"/>
+
+  <!-- RViz -->
+  <node if="$(arg rviz)" pkg="rviz" type="rviz" name="rviz"
+        args="-d $(find nav_demo)/rviz/default.rviz" output="screen"/>
+</launch>

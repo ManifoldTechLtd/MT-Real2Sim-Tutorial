@@ -1,0 +1,101 @@
+# ========================================
+# Isaac Real2Sim2Real — 统一仿真配置
+# ========================================
+# 切换机器人只需修改 quadruped.robot_type
+# 支持: kinematic_car (默认, 履带车运动学模型) | spot | go2
+# 注: kinematic_car 用于验证导航算法 (任意地形可通过); spot/go2 用于步态测试.
+
+# 仿真引擎设置
+simulation:
+  headless: false
+  # 视口分辨率 (越小渲染越快, 物理仿真更稳)
+  # 默认 1600x900; 算力紧张可降到 1280x720 或 1024x576
+  width: 1280
+  height: 720
+  # 渲染器: "RayTracedLighting"(默认/推荐) | "PathTracing"(慢, 仅离线截图用)
+  renderer: "RayTracedLighting"
+  render_opt:
+    enabled: true
+    reflections: false
+    translucency: false
+    indirect_diffuse: false
+    shadows: false
+    ambient_occlusion: false
+
+# 场景配置
+scene:
+  environment:
+    enabled: true
+    usdz_path: "/dataset/tunnel1.usdz"
+    # usdz_path: "~/dataset/isaac/playground02/usdz/scene_final.usdz"
+    # usdz_path: "~/dataset/q9000/third_floor/usdz/scene_final.usdz"
+    position: [0.0, -0.0, 0.0]
+    orientation: [0.0, 0.0, 0.0]
+    scale: [1.0, 1.0, 1.0]
+    add_collision: true
+
+  use_default_ground: false
+  ground_z_offset: 0.0
+
+  # 物理碰撞优化
+  physics:
+    collision_approximation: "meshSimplification"
+    contact_offset: 0.08
+    rest_offset: 0.01
+
+# 机器人配置
+# 切换机器人只需修改 robot_type, 其余自动适配
+quadruped:
+  robot_type: "kinematic_car"              # kinematic_car | spot | go2
+  prim_path: "/World/Quadruped"
+  # position: [1.0, 1.0, 0.3]              # Go2 初始位姿
+  # position: [1.0, 1.0, 0.7]              # Spot 初始位姿 (站立高度 ~0.6m)
+  position: [1.0, 1.0, 0.20]               # kinematic_car 起点 (base_link 离地 0.2m, raycast 后会自适应)
+
+# 履带车几何参数 (仅 robot_type=kinematic_car 时生效)
+kinematic_car:
+  size: [1.04, 0.77, 0.30]                 # K02: length, width, height (m)
+  base_link_z_above_ground: 0.20
+  raycast_max_dist: 20.0
+  visual_color: [0.85, 0.55, 0.10]
+  ignore_lateral: true                     # 履带车 vy = 0
+  debug_terrain: true                      # 打印地形拟合 / 拖动 debug (1Hz 成功; 每帧失败/拖动), 调好后改 false
+
+  # RTX Lidar 自身回波过滤 (详见 kinematic_car.yaml 注释).
+  # MLXS nearRangeM=0.5m 兜不住 chassis 远角 (~0.65m); 在 lidar 局部系整盒滤掉.
+  lidar_self_filter:
+    enable: false
+    x_half: 0.60
+    y_half: 0.45
+    z_min: -0.55
+    z_max: -0.10
+
+# 光照配置 (室内场景优化)
+lighting:
+  dome_intensity: 1000.0
+  distant_intensity: 800.0
+  distant_rotation: [-80, 0, 0]
+
+# 传感器套件
+# 从 calibration/ 目录读取内外参, 创建 Camera + LiDAR + IMU
+sensor_suite:
+  enabled: true
+  calibration_dir: "calibration/kinematic_car"   # 履带车专用 (mount.z=0, lidar 离地 0.5m)
+  # calibration_dir: "calibration/pinhole"  # Spot/Go2 套件 (mount.z=0.5)
+  # calibration_dir: "calibration/odin1"    # ODIN1 鱼眼 + LiDAR 套件
+
+# TCP 桥接配置
+bridge:
+  host: "0.0.0.0"
+  port: 9090
+  pose_rate: 50       # Hz
+  pointcloud_rate: 5  # Hz (降低以减小 RViz 延迟)
+  image_rate: 10      # Hz — Camera 图像 (JPEG 压缩)
+  image_quality: 80   # JPEG 质量 (1-100, 越低越小)
+  imu_rate: 50        # Hz — IMU 加速度/角速度
+
+# 手动控制参数 (WASD)
+control:
+  linear_speed: 1.5
+  lateral_speed: 1.0
+  yaw_speed: 1.5

@@ -1,0 +1,19 @@
+<launch>
+  <!-- Navigation Algorithm Nodes -->
+  <arg name="config_file" default="$(find nav_algo)/config/nav_params.yaml"/>
+
+  <!-- Terrain Analysis -->
+  <node pkg="nav_algo" type="terrain_analysis_node" name="terrain_analysis" output="screen">
+    <rosparam file="$(arg config_file)" subst_value="true"/>
+  </node>
+
+  <!-- Local Planner -->
+  <node pkg="nav_algo" type="local_planner_node" name="local_planner" output="screen">
+    <rosparam file="$(arg config_file)" subst_value="true"/>
+  </node>
+
+  <!-- Path Follower -->
+  <node pkg="nav_algo" type="path_follower_node" name="path_follower" output="screen">
+    <rosparam file="$(arg config_file)" subst_value="true"/>
+  </node>
+</launch>

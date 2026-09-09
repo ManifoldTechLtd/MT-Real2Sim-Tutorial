@@ -1,0 +1,9 @@
+# ========================================
+# LiDAR 内参配置 - odin1 LiDAR
+# ========================================
+#
+# 固态 RTX LiDAR 配置
+# ZVISION_ML30S: 153°×73° FOV, 51K pts/frame, 无旋转畸变
+
+model: rtx_lidar
+config_name: "lidar_configs/json/MLXS_nofire_quarter.json"

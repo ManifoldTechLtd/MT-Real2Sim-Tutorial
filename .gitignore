@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# ROS
+ros1_ws/build/
+ros1_ws/devel/
+ros1_ws/.catkin_workspace
+ros1_ws/install/
+
+# Isaac Sim
+*.log
+sensor_suite_debug.log
+
+# Docker
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+/tmp/
+*.log
+
+# Dataset (场景文件通常很大，不提交)
+dataset/
+*.usdz
+
+# Cache
+.cache/
+*.lut

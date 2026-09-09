@@ -1,0 +1,83 @@
+<launch>
+<!--
+  sim_octomap_v4.launch — V4 navigation stack (Phase A.4) for Isaac Sim
+
+  V4 替换: path_detect (2D 启发式) → octomap_occ (3D OcTree) + traversability_analyzer
+           (support+cell-based cliff) → /traversability/passability_grid
+
+  数据流:
+    Isaac Sim → /registered_scan (frame=lidar1)
+              → octomap_occ.cloud_in
+              → /octomap/octomap (octomap_msgs/Octomap, frame=map)
+              → traversability_analyzer.octomap_in
+              → /traversability/passability_grid (OccupancyGrid 2D, frame=map)
+
+  注意 — Sim TF tree 特殊点:
+    bridge_node.py 把 dynamic pose 发给 odin1_base_link (= Spot body link, z≈0.5m).
+    base_link / base_footprint 静态 TF 链路在 sim 里可能断 (TF tree 多父冲突).
+    所以这里 base_frame=odin1_base_link + ground_z_offset=-0.5, 让 trav_analyzer
+    的 ground_z 落在地面附近. 真机用默认 base_frame=base_footprint + offset=0.
+
+  前置:
+    1. /tools/setup_k02_overlay.sh 已执行 (链了 pointcloud_filter / octomap_occ /
+       traversability_analyzer 到 /k02_ws/src, catkin_make 成功)
+    2. sim_bridge/bridge.launch 在跑 (/registered_scan 有数据, TF 树通)
+    3. Isaac sim 运行中, 桥场景已加载
+
+  用法:
+    source /k02_ws/devel/setup.bash
+    roslaunch sim_bridge sim_octomap_v4.launch
+-->
+
+  <!-- ============================================================ -->
+  <!-- 全局 args                                                     -->
+  <!-- ============================================================ -->
+  <!-- Sim Spot body 距地面高度. Isaac sim publish 的 pose 是 body link 在
+       world 系的位姿; trav_analyzer 用 base_frame TF z 减 offset 得到真实
+       地面高度 (≈ 0). 履带车 / Go2 切换时改这里. -->
+  <arg name="sim_body_height_m" default="0.50" />
+
+  <!-- 输入点云 topic: Isaac sim 默认发 /registered_scan, frame=lidar1 -->
+  <arg name="cloud_in_topic"    default="/registered_scan" />
+
+  <!-- ============================================================ -->
+  <!-- (1) octomap_occ — 3D OcTree 占据图                            -->
+  <!-- ============================================================ -->
+  <include file="$(find octomap_occ)/launch/octomap_occ.launch">
+    <arg name="cloud_topic"     value="$(arg cloud_in_topic)" />
+    <arg name="map_frame"       value="map" />
+    <arg name="nodelet_manager" value="octomap_manager" />
+  </include>
+
+  <!-- octomap_occ 默认 base_frame=base_link 用于机身周围 clear-box.
+       在 sim 中 base_link 可能没有 TF 解到 map (见上文 TF 注意), 所以这里
+       后置覆盖 base_frame=odin1_base_link (有 dynamic TF 直通 map). -->
+  <param name="/octomap_occ/base_frame" value="odin1_base_link" />
+
+  <!-- ============================================================ -->
+  <!-- (2) traversability_analyzer — OcTree → 2D passability_grid    -->
+  <!-- ============================================================ -->
+  <include file="$(find traversability_analyzer)/launch/traversability_analyzer.launch">
+    <arg name="octomap_topic"   value="/octomap/octomap" />
+    <arg name="output_grid"     value="/traversability/passability_grid" />
+    <arg name="map_frame"       value="map" />
+    <!-- Sim: 用 odin1_base_link 解 TF, 用 ground_z_offset 把 body link
+         z 拉到地面参考. -->
+    <arg name="base_frame"      value="odin1_base_link" />
+    <arg name="ground_z_offset" value="-$(arg sim_body_height_m)" />
+    <!-- 算法参数 — 与真机默认一致, 先跑通再调 -->
+    <arg name="voxel_size"            value="0.10" />
+    <arg name="support_search_depth"  value="0.30" />
+    <arg name="ground_offset"         value="0.10" />
+    <arg name="support_dilate_cells"  value="1" />
+    <arg name="observed_z_halfwidth"  value="5.0" />
+    <arg name="obstacle_z_min"        value="0.40" />
+    <arg name="obstacle_z_max"        value="1.50" />
+    <arg name="obstacle_dilate_cells" value="1" />
+    <arg name="surface_dilate_cells"  value="1" />
+    <arg name="cliff_drop"            value="0.10" />
+    <arg name="map_size_m"            value="30.0" />
+    <arg name="publish_rate"          value="2.0" />
+  </include>
+
+</launch>

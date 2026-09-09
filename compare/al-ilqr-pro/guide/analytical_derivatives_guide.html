@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AL-iLQR 解析求导 — 技术详解</title>
+<script>window.MathJax={tex:{inlineMath:[['$','$']],displayMath:[['$$','$$']]},svg:{fontCache:'global'}};</script>
+<script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
+<style>
+:root{--bg:#fafaf7;--text:#2d2d2d;--heading:#1a1a2e;--accent:#4a6e5a;--accent-light:#e8f0ec;--border:#d4d0c8;--code-bg:#f3f1ec;--card-bg:#fff;--muted:#6b6b6b;--red:#8b4049;--green:#4a6e5a;}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:"Source Serif 4","Noto Serif SC","Georgia",serif;color:var(--text);background:var(--bg);line-height:1.75;font-size:16.5px;}
+.container{max-width:820px;margin:0 auto;padding:0 28px;}
+header{padding:72px 0 48px;border-bottom:1px solid var(--border);}
+header h1{font-family:"Inter","Noto Sans SC","Helvetica Neue",sans-serif;font-size:28px;font-weight:600;color:var(--heading);letter-spacing:-0.5px;margin-bottom:12px;}
+header .subtitle{color:var(--muted);font-size:15px;}
+h2{font-family:"Inter","Noto Sans SC",sans-serif;font-size:21px;font-weight:600;color:var(--heading);margin:52px 0 20px;padding-bottom:8px;border-bottom:1px solid var(--border);}
+h3{font-family:"Inter","Noto Sans SC",sans-serif;font-size:17px;font-weight:600;color:var(--heading);margin:32px 0 12px;}
+p{margin:0 0 16px;}
+a{color:var(--accent);text-decoration:none;border-bottom:1px solid transparent;}
+a:hover{border-bottom-color:var(--accent);}
+code{font-family:"JetBrains Mono","Fira Code",monospace;font-size:14px;background:var(--code-bg);padding:2px 6px;border-radius:3px;}
+pre{background:var(--code-bg);padding:18px 22px;border-radius:6px;overflow-x:auto;margin:16px 0;font-size:13.5px;line-height:1.6;border:1px solid var(--border);}
+pre code{background:none;padding:0;}
+.card{background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:24px 28px;margin:20px 0;}
+.perf-grid{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin:28px 0;}
+.perf-box{text-align:center;padding:28px 20px;border:1px solid var(--border);border-radius:8px;background:var(--card-bg);}
+.perf-box .label{font-family:"Inter","Noto Sans SC",sans-serif;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;}
+.perf-box .value{font-family:"Inter",sans-serif;font-size:40px;font-weight:700;letter-spacing:-1px;}
+.perf-box.old .value{color:var(--red);}
+.perf-box.new .value{color:var(--green);}
+.perf-box .unit{font-size:16px;font-weight:400;color:var(--muted);}
+.arrow-between{display:flex;align-items:center;justify-content:center;font-size:32px;color:var(--muted);grid-column:1/-1;margin:-8px 0;}
+.callout{background:var(--accent-light);border-left:3px solid var(--accent);padding:14px 20px;margin:20px 0;border-radius:0 6px 6px 0;font-size:15px;}
+/* collapsible */
+details{margin:12px 0;}
+details summary{cursor:pointer;font-family:"Inter","Noto Sans SC",sans-serif;font-weight:500;font-size:15.5px;color:var(--heading);padding:10px 0;list-style:none;display:flex;align-items:center;gap:8px;}
+details summary::before{content:"▸";font-size:12px;transition:transform 0.2s;display:inline-block;width:14px;}
+details[open] summary::before{transform:rotate(90deg);}
+details .inner{padding:4px 0 8px 22px;border-left:2px solid var(--border);margin-left:6px;}
+/* tabs */
+.tab-group{margin:24px 0;}
+.tab-nav{display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:0;}
+.tab-btn{font-family:"Inter","Noto Sans SC",sans-serif;font-size:14px;padding:10px 20px;border:1px solid transparent;border-bottom:none;background:none;cursor:pointer;color:var(--muted);border-radius:6px 6px 0 0;position:relative;bottom:-1px;}
+.tab-btn.active{color:var(--heading);background:var(--card-bg);border-color:var(--border);border-bottom-color:var(--card-bg);font-weight:500;}
+.tab-panel{display:none;padding:24px;background:var(--card-bg);border:1px solid var(--border);border-top:none;border-radius:0 0 6px 6px;}
+.tab-panel.active{display:block;}
+/* comparison bar */
+.bar-chart{margin:24px 0;}
+.bar-row{display:flex;align-items:center;margin:6px 0;font-family:"Inter",sans-serif;font-size:13px;}
+.bar-row .bar-label{width:140px;text-align:right;padding-right:12px;color:var(--muted);}
+.bar-row .bar-track{flex:1;height:22px;background:#eee;border-radius:4px;overflow:hidden;position:relative;}
+.bar-row .bar-fill{height:100%;border-radius:4px;transition:width 0.8s ease;}
+.bar-row .bar-val{width:70px;padding-left:10px;font-weight:500;font-size:12px;}
+/* svg diagram */
+.diagram-wrap{margin:28px 0;text-align:center;overflow-x:auto;}
+.diagram-wrap svg{max-width:100%;}
+/* toggle switch */
+.mode-toggle{display:flex;align-items:center;gap:12px;margin:20px 0;font-family:"Inter","Noto Sans SC",sans-serif;font-size:14px;}
+.switch{position:relative;width:48px;height:26px;cursor:pointer;}
+.switch input{opacity:0;width:0;height:0;}
+.switch .slider{position:absolute;inset:0;background:var(--border);border-radius:13px;transition:0.3s;}
+.switch .slider::before{content:"";position:absolute;width:20px;height:20px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:0.3s;}
+.switch input:checked+.slider{background:var(--accent);}
+.switch input:checked+.slider::before{transform:translateX(22px);}
+table{width:100%;border-collapse:collapse;margin:16px 0;font-size:15px;}
+th,td{border:1px solid var(--border);padding:9px 14px;text-align:left;}
+th{background:var(--code-bg);font-family:"Inter","Noto Sans SC",sans-serif;font-size:14px;font-weight:500;}
+.footnote{font-size:13.5px;color:var(--muted);margin-top:48px;padding-top:20px;border-top:1px solid var(--border);}
+footer{text-align:center;padding:40px 0;color:var(--muted);font-size:13px;}
+/* animation containers */
+.anim-wrap{margin:28px 0;text-align:center;}
+.anim-wrap canvas{border:1px solid var(--border);border-radius:6px;background:#fff;display:block;margin:0 auto;}
+.anim-controls{display:flex;align-items:center;justify-content:center;gap:14px;margin:10px auto;flex-wrap:wrap;font-family:"Inter","Noto Sans SC",sans-serif;font-size:13px;color:var(--muted);}
+.anim-controls label{display:flex;align-items:center;gap:6px;}
+.anim-controls input[type=range]{width:140px;accent-color:var(--accent);}
+.anim-controls .val{font-family:"JetBrains Mono",monospace;font-size:12px;min-width:42px;text-align:right;color:var(--text);}
+.anim-caption{font-size:13px;color:var(--muted);margin-top:6px;text-align:center;font-family:"Inter","Noto Sans SC",sans-serif;}
+@media(max-width:600px){.perf-grid{grid-template-columns:1fr;}.perf-box .value{font-size:32px;}}
+</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+<h1>AL-iLQR 解析求导</h1>
+<p class="subtitle">从中心差分到闭式公式 — 15 倍加速的原理与实现</p>
+</header>
+
+<!-- ==================== Section 1: Performance ==================== -->
+<h2>一、性能对比</h2>
+
+<p>在相同场景（80 步时域、多圆车身模型、道路边界 + 障碍物 + 速度 + 控制约束）下，
+切换求导方式后的单次规划耗时：</p>
+
+<div class="perf-grid">
+  <div class="perf-box old">
+    <div class="label">中心差分</div>
+    <div class="value">150 <span class="unit">ms</span></div>
+  </div>
+  <div class="perf-box new">
+    <div class="label">解析求导</div>
+    <div class="value">9.6 <span class="unit">ms</span></div>
+  </div>
+</div>
+
+<p>轨迹和约束满足情况一致，耗时降低约 <strong>15.6 倍</strong>。
+加速来源并非算法本身的改变，而是消除了求导环节中大量重复的函数调用。</p>
+
+<!-- ==================== Section 2: Why slow ==================== -->
+<h2>二、中心差分为什么慢</h2>
+
+<p>iLQR 每次迭代需要对每个时间步 $k$ 计算以下导数：</p>
+
+<table>
+<tr><th>求导项</th><th>公式</th><th>差分调用次数</th></tr>
+<tr><td>$A_k = \partial f / \partial x$</td><td>对 $x$ 的每个分量 $\pm\varepsilon$</td><td>$2n = 8$</td></tr>
+<tr><td>$B_k = \partial f / \partial u$</td><td>对 $u$ 的每个分量 $\pm\varepsilon$</td><td>$2m = 4$</td></tr>
+<tr><td>$\ell_{xx}$</td><td>四点差分</td><td>$4n^2 = 64$</td></tr>
+<tr><td>$\ell_{uu}$</td><td>四点差分</td><td>$4m^2 = 16$</td></tr>
+<tr><td>$\ell_{ux}$</td><td>四点差分</td><td>$4nm = 32$</td></tr>
+<tr><td>$\ell_x,\;\ell_u$</td><td>中心差分</td><td>$2(n+m) = 12$</td></tr>
+</table>
+
+<p>以 $n=4,\; m=2$ 计算，<strong>每步需 136 次函数调用</strong>。
+80 步时域下，每次 iLQR 迭代调用函数超过一万次。
+而每次代价函数调用内部还需遍历所有约束的 <code>Evaluate</code>，
+实际计算量更大。</p>
+
+<div class="callout">
+解析求导将这些调用全部替换为直接的矩阵运算——每步仅需计算一次三角函数和若干矩阵乘法，调用次数从万级降至百级。
+</div>
+
+<h3>直观理解：差分 vs 解析</h3>
+<p>下图展示对函数 $f(x)=\sin(x)+0.3x$ 求导数。拖动滑块改变差分步长 $\varepsilon$：</p>
+<div class="anim-wrap">
+<canvas id="cvFdVsAn" width="760" height="290"></canvas>
+<div class="anim-controls">
+  <label>求导点 $x_0$: <input type="range" id="fdX0" min="0.5" max="5.5" step="0.05" value="2.5"><span class="val" id="fdX0Val">2.50</span></label>
+  <label>$\varepsilon$: <input type="range" id="fdEps" min="0.05" max="1.5" step="0.01" value="0.8"><span class="val" id="fdEpsVal">0.80</span></label>
+</div>
+<p class="anim-caption">左：中心差分用割线逼近，$\varepsilon$ 越大误差越大。右：解析导数直接给出切线。</p>
+</div>
+
+<!-- ==================== Section 3: Architecture ==================== -->
+<h2>三、架构设计</h2>
+
+<p>系统提供两种模式，用户可在 UI 中实时切换：</p>
+
+<div class="mode-toggle">
+  <span style="color:var(--red);font-weight:500;">Finite Difference</span>
+  <label class="switch"><input type="checkbox" id="modeSwitch" checked><span class="slider"></span></label>
+  <span style="color:var(--green);font-weight:500;">Analytical</span>
+</div>
+
+<p>切换后立即生效，无需重建场景。在代码层面，这通过三个基类的可选虚方法实现：</p>
+
+<div class="diagram-wrap">
+<svg viewBox="0 0 700 320" width="700" xmlns="http://www.w3.org/2000/svg" style="font-family:Inter,Noto Sans SC,sans-serif">
+  <!-- boxes -->
+  <rect x="20" y="20" width="200" height="60" rx="6" fill="#fff" stroke="#4a6e5a" stroke-width="1.5"/>
+  <text x="120" y="46" text-anchor="middle" font-size="13" font-weight="600" fill="#1a1a2e">DynamicsModel</text>
+  <text x="120" y="64" text-anchor="middle" font-size="11" fill="#6b6b6b">HasAnalyticalJacobian()</text>
+
+  <rect x="250" y="20" width="200" height="60" rx="6" fill="#fff" stroke="#4a6e5a" stroke-width="1.5"/>
+  <text x="350" y="46" text-anchor="middle" font-size="13" font-weight="600" fill="#1a1a2e">CostFunction</text>
+  <text x="350" y="64" text-anchor="middle" font-size="11" fill="#6b6b6b">HasAnalyticalDerivatives()</text>
+
+  <rect x="480" y="20" width="200" height="60" rx="6" fill="#fff" stroke="#4a6e5a" stroke-width="1.5"/>
+  <text x="580" y="46" text-anchor="middle" font-size="13" font-weight="600" fill="#1a1a2e">ConstraintFunction</text>
+  <text x="580" y="64" text-anchor="middle" font-size="11" fill="#6b6b6b">HasAnalyticalJacobian()</text>
+
+  <!-- arrows down -->
+  <line x1="120" y1="80" x2="120" y2="130" stroke="#aaa" stroke-width="1" marker-end="url(#arrowG)"/>
+  <line x1="350" y1="80" x2="350" y2="130" stroke="#aaa" stroke-width="1" marker-end="url(#arrowG)"/>
+  <line x1="580" y1="80" x2="580" y2="130" stroke="#aaa" stroke-width="1" marker-end="url(#arrowG)"/>
+
+  <!-- implementations -->
+  <rect x="10" y="132" width="220" height="40" rx="5" fill="#e8f0ec" stroke="#4a6e5a" stroke-width="1"/>
+  <text x="120" y="157" text-anchor="middle" font-size="11.5" fill="#2d2d2d">KinematicBicycleModel</text>
+
+  <rect x="240" y="132" width="220" height="40" rx="5" fill="#e8f0ec" stroke="#4a6e5a" stroke-width="1"/>
+  <text x="350" y="157" text-anchor="middle" font-size="11.5" fill="#2d2d2d">LaneTrackingCost / AL Cost</text>
+
+  <rect x="470" y="132" width="220" height="40" rx="5" fill="#e8f0ec" stroke="#4a6e5a" stroke-width="1"/>
+  <text x="580" y="157" text-anchor="middle" font-size="11.5" fill="#2d2d2d">MultiCircle / LSE / ...</text>
+
+  <!-- ILQRSolver -->
+  <line x1="120" y1="172" x2="120" y2="220" stroke="#aaa" stroke-width="1"/>
+  <line x1="350" y1="172" x2="350" y2="220" stroke="#aaa" stroke-width="1"/>
+  <line x1="580" y1="172" x2="580" y2="220" stroke="#aaa" stroke-width="1"/>
+  <line x1="120" y1="220" x2="580" y2="220" stroke="#aaa" stroke-width="1"/>
+  <line x1="350" y1="220" x2="350" y2="240" stroke="#aaa" stroke-width="1" marker-end="url(#arrowG)"/>
+
+  <rect x="220" y="244" width="260" height="52" rx="6" fill="#1a1a2e" stroke="none"/>
+  <text x="350" y="266" text-anchor="middle" font-size="13" font-weight="600" fill="#fff">ILQRSolver</text>
+  <text x="350" y="284" text-anchor="middle" font-size="11" fill="#aaa">DerivativeMode → 分派</text>
+
+  <defs><marker id="arrowG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#aaa"/></marker></defs>
+</svg>
+</div>
+
+<p>当某个组件返回 <code>HasAnalytical*() = false</code>（如 <code>PolygonCollisionConstraint</code>），
+求解器会对该部分自动回退到中心差分，其余部分仍使用解析公式。</p>
+
+<!-- ==================== Section 4: call count ==================== -->
+<h2>四、调用量对比</h2>
+
+<p>以单步 $(n=4, m=2)$ 为例，对比每步函数调用次数：</p>
+
+<div class="bar-chart" id="barChart">
+  <div class="bar-row"><span class="bar-label">$A$ Jacobian</span><div class="bar-track"><div class="bar-fill" style="width:80%;background:var(--red)"></div></div><span class="bar-val fd-val">8 calls</span></div>
+  <div class="bar-row"><span class="bar-label">$B$ Jacobian</span><div class="bar-track"><div class="bar-fill" style="width:40%;background:var(--red)"></div></div><span class="bar-val fd-val">4 calls</span></div>
+  <div class="bar-row"><span class="bar-label">$\ell_{xx}$</span><div class="bar-track"><div class="bar-fill" style="width:100%;background:var(--red)"></div></div><span class="bar-val fd-val">64 calls</span></div>
+  <div class="bar-row"><span class="bar-label">$\ell_{uu}$</span><div class="bar-track"><div class="bar-fill" style="width:25%;background:var(--red)"></div></div><span class="bar-val fd-val">16 calls</span></div>
+  <div class="bar-row"><span class="bar-label">$\ell_{ux}$</span><div class="bar-track"><div class="bar-fill" style="width:50%;background:var(--red)"></div></div><span class="bar-val fd-val">32 calls</span></div>
+  <div class="bar-row"><span class="bar-label">$\ell_x,\ell_u$</span><div class="bar-track"><div class="bar-fill" style="width:18.75%;background:var(--red)"></div></div><span class="bar-val fd-val">12 calls</span></div>
+</div>
+<p style="text-align:center;font-size:14px;color:var(--muted);">解析模式下以上所有项均为 <strong style="color:var(--green)">0 次函数调用</strong>，直接由闭式公式给出。</p>
+
+<!-- ==================== Section 5: Formulas ==================== -->
+<h2>五、解析公式推导</h2>
+
+<p>以下给出每个组件的闭式导数。点击展开查看推导。</p>
+
+<!-- 5.1 Dynamics -->
+<details>
+<summary>动力学 Jacobian — KinematicBicycleModel</summary>
+<div class="inner">
+<p>前向欧拉离散化后的状态转移：</p>
+$$\begin{aligned}
+f_0 &= p_x + \Delta t\, v\cos\theta \\
+f_1 &= p_y + \Delta t\, v\sin\theta \\
+f_2 &= \theta + \Delta t\,\frac{v\tan\delta}{L} \\
+f_3 &= v + \Delta t\, a
+\end{aligned}$$
+<p>对状态求偏导得 $A = \partial f / \partial x$：</p>
+$$A = \begin{bmatrix}
+1 & 0 & -\Delta t\,v\sin\theta & \Delta t\cos\theta \\
+0 & 1 & \Delta t\,v\cos\theta & \Delta t\sin\theta \\
+0 & 0 & 1 & \frac{\Delta t\tan\delta}{L} \\
+0 & 0 & 0 & 1
+\end{bmatrix}$$
+<p>对控制求偏导得 $B = \partial f / \partial u$：</p>
+$$B = \begin{bmatrix}
+0 & 0 \\ 0 & 0 \\
+0 & \dfrac{\Delta t\,v}{L\cos^2\delta} \\
+\Delta t & 0
+\end{bmatrix}$$
+<p>关键观察：$A$ 接近单位矩阵（对角占优），非零项仅 4 个，都是简单三角函数。
+$B$ 中唯一的非平凡项是 $\partial f_2 / \partial \delta$，包含 $\cos^{-2}\delta$。</p>
+</div>
+</details>
+
+<div style="margin-top:20px;">
+<p style="font-size:14px;">拖动滑块改变车辆状态，观察一步预测和 Jacobian 矩阵数值的实时变化：</p>
+<div class="anim-wrap">
+<canvas id="cvBicycle" width="760" height="300"></canvas>
+<div class="anim-controls">
+  <label>$\theta$: <input type="range" id="biYaw" min="-1.57" max="1.57" step="0.02" value="0.3"><span class="val" id="biYawVal">0.30</span></label>
+  <label>$v$: <input type="range" id="biV" min="0" max="8" step="0.1" value="4"><span class="val" id="biVVal">4.0</span></label>
+  <label>$\delta$: <input type="range" id="biDelta" min="-0.6" max="0.6" step="0.02" value="0.15"><span class="val" id="biDeltaVal">0.15</span></label>
+</div>
+</div>
+</div>
+
+
+<!-- 5.2 LaneTrackingCost -->
+<details>
+<summary>LaneTrackingCost — 梯度与 Hessian</summary>
+<div class="inner">
+<p>定义三个误差变量及其对状态的 Jacobian（均为常向量）：</p>
+$$\begin{aligned}
+e_{\text{lat}} &= -\sin h\,(p_x - o_x) + \cos h\,(p_y - o_y)
+& \frac{\partial e_{\text{lat}}}{\partial x} &= [-\sin h,\;\cos h,\;0,\;0] \\
+e_{\text{hdg}} &= \theta - h
+& \frac{\partial e_{\text{hdg}}}{\partial x} &= [0,\;0,\;1,\;0] \\
+e_{\text{spd}} &= v - v_{\text{target}}
+& \frac{\partial e_{\text{spd}}}{\partial x} &= [0,\;0,\;0,\;1]
+\end{aligned}$$
+
+<h3>Stage cost</h3>
+<p>代价函数 $\ell = \tfrac12 w_l e_{\text{lat}}^2 + \tfrac12 w_h e_{\text{hdg}}^2 + \tfrac12 w_s e_{\text{spd}}^2 + \tfrac12 w_a a^2 + \tfrac12 w_\delta \delta^2$</p>
+$$\ell_x = w_l\, e_{\text{lat}}\, \frac{\partial e_{\text{lat}}}{\partial x}
++ w_h\, e_{\text{hdg}}\, \frac{\partial e_{\text{hdg}}}{\partial x}
++ w_s\, e_{\text{spd}}\, \frac{\partial e_{\text{spd}}}{\partial x}$$
+$$\ell_u = \begin{bmatrix} w_a\,a \\ w_\delta\,\delta \end{bmatrix}$$
+<p>由于每个误差对 $x$ 的 Jacobian 是常数行向量，Hessian 是三个秩 1 外积之和：</p>
+$$\ell_{xx} = w_l\left(\frac{\partial e_{\text{lat}}}{\partial x}\right)^{\!\top}\frac{\partial e_{\text{lat}}}{\partial x}
++ w_h\left(\frac{\partial e_{\text{hdg}}}{\partial x}\right)^{\!\top}\frac{\partial e_{\text{hdg}}}{\partial x}
++ w_s\left(\frac{\partial e_{\text{spd}}}{\partial x}\right)^{\!\top}\frac{\partial e_{\text{spd}}}{\partial x}$$
+$$\ell_{uu} = \operatorname{diag}(w_a,\;w_\delta), \qquad \ell_{ux} = 0$$
+<p>终端代价类似，增加纵向项 $e_{\text{lon}} = \cos h\,(p_x - o_x) + \sin h\,(p_y - o_y) - s_{\text{target}}$。</p>
+</div>
+</details>
+
+<!-- 5.3 QuadraticCost -->
+<details>
+<summary>QuadraticCost — 标准二次型</summary>
+<div class="inner">
+$$\ell = \tfrac12 (x - x_r)^\top Q\,(x - x_r) + \tfrac12 (u - u_r)^\top R\,(u - u_r)$$
+$$\ell_x = Q(x-x_r),\quad \ell_u = R(u-u_r),\quad \ell_{xx} = Q,\quad \ell_{uu} = R,\quad \ell_{ux} = 0$$
+<p>终端：$\ell_f = \tfrac12(x-x_r)^\top Q_f(x-x_r)$，$\ell_x = Q_f(x-x_r)$，$\ell_{xx} = Q_f$。</p>
+</div>
+</details>
+
+<!-- 5.4 GuidanceTrackingCost -->
+<details>
+<summary>GuidanceTrackingCost</summary>
+<div class="inner">
+<p>Stage 模式下，代价对位置、航向、速度分别加权：</p>
+$$\ell_x = \begin{bmatrix} w_p\Delta x \\ w_p\Delta y \\ w_h e_{\text{hdg}} \\ w_s e_{\text{spd}} \end{bmatrix},\qquad
+\ell_{xx} = \operatorname{diag}(w_p,\;w_p,\;w_h,\;w_s),\qquad \ell_u = 0,\;\ell_{uu}=0$$
+<p>终端纵向投影模式：$e_{\text{lon}} = \cos h\,(p_x - r_x) + \sin h\,(p_y - r_y)$</p>
+$$\ell_x = w_p\,e_{\text{lon}}\begin{bmatrix}\cos h \\ \sin h \\ 0 \\ 0\end{bmatrix},\qquad
+\ell_{xx} = w_p\begin{bmatrix}\cos h \\ \sin h \\ 0 \\ 0\end{bmatrix}\begin{bmatrix}\cos h & \sin h & 0 & 0\end{bmatrix}$$
+</div>
+</details>
+
+<!-- 5.5 ControlRateCost -->
+<details>
+<summary>ControlRateCost</summary>
+<div class="inner">
+$$\ell = \tfrac12 w_j(a-a_{\text{prev}})^2 + \tfrac12 w_{sr}(\delta - \delta_{\text{prev}})^2$$
+$$\ell_x = 0,\quad \ell_u = \begin{bmatrix}w_j(a-a_{\text{prev}})\\w_{sr}(\delta-\delta_{\text{prev}})\end{bmatrix},\quad \ell_{xx}=0,\quad \ell_{uu}=\operatorname{diag}(w_j,w_{sr}),\quad \ell_{ux}=0$$
+</div>
+</details>
+
+<!-- ===== Constraint Jacobians (tabbed) ===== -->
+<h3>约束 Jacobian</h3>
+<p>以下约束均只需提供 $\partial c / \partial x$ 和 $\partial c / \partial u$，由 AL 展开公式（见下一节）组装为代价的梯度和 Hessian。</p>
+
+<div class="tab-group">
+<div class="tab-nav">
+  <button class="tab-btn active" onclick="switchTab(this,0)">ControlBox</button>
+  <button class="tab-btn" onclick="switchTab(this,1)">SpeedLimit</button>
+  <button class="tab-btn" onclick="switchTab(this,2)">RoadBoundary</button>
+  <button class="tab-btn" onclick="switchTab(this,3)">CircularObs</button>
+  <button class="tab-btn" onclick="switchTab(this,4)">MultiCircleRoad</button>
+  <button class="tab-btn" onclick="switchTab(this,5)">MultiCircleObs</button>
+  <button class="tab-btn" onclick="switchTab(this,6)">LSE Polygon</button>
+  <button class="tab-btn" onclick="switchTab(this,7)">Terminal</button>
+</div>
+
+<div class="tab-panel active">
+  <p><strong>ControlBoxConstraint</strong> — 控制量上下界</p>
+  $$c = \begin{bmatrix} u_{\min} - u \\ u - u_{\max}\end{bmatrix}\in\mathbb{R}^{2m}$$
+  $$\frac{\partial c}{\partial x} = 0, \qquad \frac{\partial c}{\partial u} = \begin{bmatrix}-I\\I\end{bmatrix}$$
+  <p>Jacobian 为常数矩阵，无需运行时计算。</p>
+</div>
+
+<div class="tab-panel">
+  <p><strong>SpeedLimitConstraint</strong> — 速度上下界</p>
+  $$c = \begin{bmatrix}v_{\min}-v \\ v-v_{\max}\end{bmatrix}$$
+  $$\frac{\partial c}{\partial x} = \begin{bmatrix}0&0&0&-1\\0&0&0&1\end{bmatrix},\qquad \frac{\partial c}{\partial u}=0$$
+</div>
+
+<div class="tab-panel">
+  <p><strong>RoadBoundaryConstraint</strong> — 道路边界（点模型）</p>
+  <p>横向偏差 $e_{\text{lat}} = -\sin h\,(p_x-o_x) + \cos h\,(p_y-o_y)$</p>
+  $$\frac{\partial c}{\partial x} = \begin{bmatrix}\sin h & -\cos h & 0 & 0 \\ -\sin h & \cos h & 0 & 0\end{bmatrix},\qquad \frac{\partial c}{\partial u}=0$$
+</div>
+
+<div class="tab-panel">
+  <p><strong>CircularObstacleConstraint</strong> — 圆形障碍物（点模型）</p>
+  $$c = r^2 - (\Delta x^2 + \Delta y^2), \qquad \Delta x = p_x - c_x,\;\Delta y = p_y - c_y$$
+  $$\frac{\partial c}{\partial x} = \begin{bmatrix}-2\Delta x & -2\Delta y & 0 & 0\end{bmatrix},\qquad \frac{\partial c}{\partial u}=0$$
+</div>
+
+<div class="tab-panel">
+  <p><strong>MultiCircleRoadBoundaryConstraint</strong> — 多圆车身道路边界</p>
+  <p>覆盖圆 $j$ 的世界坐标中心 $\mathbf{p}_j = [p_x + b_{x_j}\cos\theta,\; p_y + b_{x_j}\sin\theta]^\top$</p>
+  <p>参考线坐标系下的横向偏差：</p>
+  $$\frac{\partial\,\text{lat}_j}{\partial x} = \begin{bmatrix}-\sin h & \cos h & b_{x_j}\cos(\theta - h) & 0\end{bmatrix}$$
+  <p>约束由上下界组成，每个圆贡献两行：</p>
+  $$\frac{\partial c_{2j}}{\partial x} = -\frac{\partial\,\text{lat}_j}{\partial x},\qquad
+  \frac{\partial c_{2j+1}}{\partial x} = +\frac{\partial\,\text{lat}_j}{\partial x}$$
+</div>
+
+<div class="tab-panel">
+  <p><strong>MultiCircleVehicleObstacleConstraint</strong> — 多圆车身障碍物</p>
+  <p>$\Delta x_j = p_{j,x} - o_{cx}$，$\Delta y_j = p_{j,y} - o_{cy}$，$c_j = (r_{\text{obs}}+r_j)^2 - (\Delta x_j^2+\Delta y_j^2)$</p>
+  $$\frac{\partial c_j}{\partial x} = \begin{bmatrix}-2\Delta x_j & -2\Delta y_j & 2b_{x_j}(\Delta x_j\sin\theta - \Delta y_j\cos\theta) & 0\end{bmatrix}$$
+  <p>第三列由刚体变换链式法则给出——圆心对 $\theta$ 的偏导。</p>
+</div>
+
+<div class="tab-panel">
+  <p><strong>LSEPolygonObstacleConstraint</strong> — Log-Sum-Exp 平滑多边形</p>
+  <p>LSE 对点 $\mathbf{p}$ 的梯度是法向量的 softmax 加权平均：</p>
+  $$w_i = \frac{e^{\alpha(h_i - h_{\max})}}{\sum_k e^{\alpha(h_k - h_{\max})}}, \qquad
+  \frac{\partial\,\text{LSE}}{\partial\mathbf{p}} = \sum_i w_i\,\mathbf{n}_i$$
+  <p>约束 $c_j = r_j - \text{LSE}(\mathbf{p}_j)$，通过链式法则：</p>
+  $$\frac{\partial c_j}{\partial x} = -\left(\sum_i w_i\,\mathbf{n}_i\right)^\top \frac{\partial \mathbf{p}_j}{\partial x}$$
+</div>
+
+<div class="tab-panel">
+  <p><strong>TerminalGoalConstraint</strong> — 终端目标（等式约束）</p>
+  $$c = x - x_{\text{target}},\qquad \frac{\partial c}{\partial x} = I$$
+</div>
+
+</div><!-- end tab-group -->
+
+<h3>多圆车身刚体变换可视化</h3>
+<p>拖动滑块旋转车辆航向 $\theta$，观察覆盖圆中心如何随车身变换移动，以及对应的 Jacobian 方向：</p>
+<div class="anim-wrap">
+<canvas id="cvMultiCircle" width="760" height="310"></canvas>
+<div class="anim-controls">
+  <label>$\theta$: <input type="range" id="mcYaw" min="-1.2" max="1.2" step="0.02" value="0.0"><span class="val" id="mcYawVal">0.00</span></label>
+</div>
+<p class="anim-caption">绿色箭头 = $\partial \mathbf{p}_j / \partial \theta$ 方向（刚体变换 Jacobian 的第三列），长度正比于偏移 $b_{x_j}$。</p>
+</div>
+
+
+<!-- ==================== Section 6: AL Expansion ==================== -->
+<h2>六、AL 罚项的解析展开</h2>
+
+<p>这是整个方案的核心——将约束 Jacobian 组装为代价函数的梯度和 Hessian，避免对标量 AL 代价做全维度差分。</p>
+
+<div class="card">
+<h3>不等式约束</h3>
+<p>给定约束 $c(x,u) \in \mathbb{R}^p$，AL 罚项为：</p>
+$$\varphi = \sum_j \frac{\bigl[\max(0,\;\lambda_j + \mu_j c_j)\bigr]^2 - \lambda_j^2}{2\mu_j}$$
+<p>定义活跃集 $\mathcal{I}_j = \mathbb{1}[\lambda_j + \mu_j c_j > 0]$，投影值 $\hat{p}_j = \max(0,\;\lambda_j + \mu_j c_j)$。</p>
+<p><strong>一阶展开（梯度）</strong>：</p>
+$$\frac{\partial\varphi}{\partial x} = J_x^\top(\mathcal{I}\odot\hat{p}),\qquad
+\frac{\partial\varphi}{\partial u} = J_u^\top(\mathcal{I}\odot\hat{p})$$
+<p><strong>二阶展开（Gauss-Newton 近似）</strong>：</p>
+$$\frac{\partial^2\varphi}{\partial x^2} \approx J_x^\top\operatorname{diag}(\mathcal{I}\odot\mu)\,J_x,\qquad
+\frac{\partial^2\varphi}{\partial u^2} \approx J_u^\top\operatorname{diag}(\mathcal{I}\odot\mu)\,J_u,\qquad
+\frac{\partial^2\varphi}{\partial u\,\partial x} \approx J_u^\top\operatorname{diag}(\mathcal{I}\odot\mu)\,J_x$$
+</div>
+
+<div class="card">
+<h3>等式约束</h3>
+$$\varphi = \sum_j \bigl[\lambda_j c_j + \tfrac{\mu_j}{2}c_j^2\bigr]$$
+$$\frac{\partial\varphi}{\partial x} = J_x^\top(\lambda + \mu\odot c),\qquad
+\frac{\partial^2\varphi}{\partial x^2} \approx J_x^\top\operatorname{diag}(\mu)\,J_x$$
+</div>
+
+<div class="callout">
+二阶项忽略了 $\sum_j(\lambda_j + \mu_j c_j)\nabla^2 c_j$。在约束接近满足时此项很小，
+Gauss-Newton 近似足够精确且保证半正定性。
+</div>
+
+<h3>不等式 AL 罚项可视化</h3>
+<p>下图展示一维不等式约束 $c(x) = x - b \le 0$ 的 AL 罚项形状。拖动滑块观察 $\lambda$ 和 $\mu$ 如何影响罚项：</p>
+<div class="anim-wrap">
+<canvas id="cvAL" width="760" height="300"></canvas>
+<div class="anim-controls">
+  <label>$\lambda$: <input type="range" id="alLam" min="0" max="5" step="0.1" value="0.5"><span class="val" id="alLamVal">0.50</span></label>
+  <label>$\mu$: <input type="range" id="alMu" min="0.5" max="20" step="0.5" value="3"><span class="val" id="alMuVal">3.0</span></label>
+  <label>$b$: <input type="range" id="alB" min="-1" max="3" step="0.1" value="1"><span class="val" id="alBVal">1.0</span></label>
+</div>
+<p class="anim-caption">蓝色 = 原始代价 $\frac{1}{2}x^2$。红色 = 约束边界 $x = b$。橙色 = AL 罚项 $\varphi(x)$。绿色 = 增广总代价。</p>
+</div>
+
+
+<p>最终，每步的总展开为各部分之和：</p>
+$$\boxed{\text{总展开} = \underbrace{\text{基础代价展开}}_{\text{解析}} + \sum_{i}\underbrace{\text{AL}(\text{约束}_i)}_{\text{解析或差分}}}$$
+
+<!-- ==================== Section 7: Summary ==================== -->
+<h2>七、实现组件总览</h2>
+
+<table>
+<tr><th>组件</th><th>解析求导</th><th>说明</th></tr>
+<tr><td>KinematicBicycleModel</td><td style="color:var(--green)">A, B</td><td>sin/cos/tan 闭式</td></tr>
+<tr><td>QuadraticCost</td><td style="color:var(--green)">全部</td><td>二次型闭式</td></tr>
+<tr><td>LaneTrackingCost</td><td style="color:var(--green)">全部</td><td>外积分解</td></tr>
+<tr><td>GuidanceTrackingCost</td><td style="color:var(--green)">全部</td><td>含纵向投影终端</td></tr>
+<tr><td>ControlRateCost</td><td style="color:var(--green)">全部</td><td>仅控制量项</td></tr>
+<tr><td>ControlBoxConstraint</td><td style="color:var(--green)">Jacobian</td><td>常数矩阵</td></tr>
+<tr><td>SpeedLimitConstraint</td><td style="color:var(--green)">Jacobian</td><td>一个非零元素</td></tr>
+<tr><td>RoadBoundaryConstraint</td><td style="color:var(--green)">Jacobian</td><td>参考线航向</td></tr>
+<tr><td>CircularObstacleConstraint</td><td style="color:var(--green)">Jacobian</td><td>距离对位置的偏导</td></tr>
+<tr><td>MultiCircleRoadBoundary</td><td style="color:var(--green)">Jacobian</td><td>刚体变换链式法则</td></tr>
+<tr><td>MultiCircleVehicleObs</td><td style="color:var(--green)">Jacobian</td><td>刚体变换链式法则</td></tr>
+<tr><td>LSEPolygonObstacle</td><td style="color:var(--green)">Jacobian</td><td>softmax 梯度</td></tr>
+<tr><td>TerminalGoalConstraint</td><td style="color:var(--green)">Jacobian</td><td>单位矩阵</td></tr>
+<tr><td>PolygonCollisionConstraint</td><td style="color:var(--muted)">回退差分</td><td>GJK 距离不可微</td></tr>
+</table>
+
+<p class="footnote">
+在 UI 的 Planning Config 面板中，通过 Derivative Mode 下拉框选择
+Finite Difference 或 Analytical，即可实时切换并观察求解耗时和轨迹差异。
+两种模式产生的轨迹应高度一致——微小差异源于差分的截断误差。
+</p>
+
+<footer>AL-iLQR Pro</footer>
+
+</div>
+<script>
+function switchTab(btn, idx) {
+  const group = btn.closest('.tab-group');
+  group.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  group.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  btn.classList.add('active');
+  group.querySelectorAll('.tab-panel')[idx].classList.add('active');
+  if (window.MathJax && MathJax.typeset) MathJax.typeset();
+}
+
+/* ============ Helpers ============ */
+const C = {bg:'#fff',curve:'#2d2d2d',fd:'#8b4049',an:'#4a6e5a',grid:'#e8e6e0',
+           muted:'#999',accent:'#4a6e5a',road:'#d4d0c8',car:'#1a1a2e',circle:'rgba(74,110,90,0.18)',
+           circleStroke:'#4a6e5a',arrow:'#4a6e5a',blue:'#4a6899',orange:'#b87333',green:'#4a6e5a',red:'#8b4049'};
+function bind(id,cb){const el=document.getElementById(id);if(!el)return;el.addEventListener('input',cb);cb();}
+function val(id){return parseFloat(document.getElementById(id).value);}
+function show(id,v){const el=document.getElementById(id);if(el)el.textContent=v;}
+function drawArrow(ctx,x1,y1,x2,y2,color,lw){
+  ctx.save();ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=lw||1.5;
+  ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
+  const a=Math.atan2(y2-y1,x2-x1),hl=7;
+  ctx.beginPath();ctx.moveTo(x2,y2);
+  ctx.lineTo(x2-hl*Math.cos(a-0.35),y2-hl*Math.sin(a-0.35));
+  ctx.lineTo(x2-hl*Math.cos(a+0.35),y2-hl*Math.sin(a+0.35));
+  ctx.closePath();ctx.fill();ctx.restore();
+}
+
+/* ============ Animation 1: FD vs Analytical ============ */
+(function(){
+  const cv=document.getElementById('cvFdVsAn');if(!cv)return;
+  const ctx=cv.getContext('2d'),W=cv.width,H=cv.height;
+  const f=x=>Math.sin(x)+0.3*x, fp=x=>Math.cos(x)+0.3;
+  const xMin=-0.5,xMax=6.5,yMin=-1.2,yMax=3.5;
+  function tx(x){return 30+(x-xMin)/(xMax-xMin)*(W-60);}
+  function ty(y){return H-30-(y-yMin)/(yMax-yMin)*(H-60);}
+
+  function draw(){
+    const x0=val('fdX0'),eps=val('fdEps');
+    show('fdX0Val',x0.toFixed(2));show('fdEpsVal',eps.toFixed(2));
+    ctx.clearRect(0,0,W,H);
+    // grid
+    ctx.strokeStyle=C.grid;ctx.lineWidth=0.5;
+    for(let x=0;x<=6;x++){ctx.beginPath();ctx.moveTo(tx(x),ty(yMin));ctx.lineTo(tx(x),ty(yMax));ctx.stroke();}
+    for(let y=-1;y<=3;y++){ctx.beginPath();ctx.moveTo(tx(xMin),ty(y));ctx.lineTo(tx(xMax),ty(y));ctx.stroke();}
+    // axes
+    ctx.strokeStyle='#bbb';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(tx(xMin),ty(0));ctx.lineTo(tx(xMax),ty(0));ctx.stroke();
+    ctx.beginPath();ctx.moveTo(tx(0),ty(yMin));ctx.lineTo(tx(0),ty(yMax));ctx.stroke();
+    // curve
+    ctx.strokeStyle=C.curve;ctx.lineWidth=2;ctx.beginPath();
+    for(let px=0;px<W;px++){const x=xMin+(xMax-xMin)*px/W;const y=f(x);if(px===0)ctx.moveTo(tx(x),ty(y));else ctx.lineTo(tx(x),ty(y));}
+    ctx.stroke();
+    // label
+    ctx.fillStyle=C.muted;ctx.font='13px Inter,sans-serif';
+    ctx.fillText('f(x) = sin(x) + 0.3x',tx(0.2),ty(yMax-0.3));
+    // FD secant
+    const fPlus=f(x0+eps),fMinus=f(x0-eps),fdSlope=(fPlus-fMinus)/(2*eps);
+    ctx.setLineDash([6,4]);ctx.strokeStyle=C.fd;ctx.lineWidth=1.5;ctx.beginPath();
+    const secL=2;ctx.moveTo(tx(x0-secL),ty(f(x0)+fdSlope*(-secL)));ctx.lineTo(tx(x0+secL),ty(f(x0)+fdSlope*(secL)));ctx.stroke();
+    ctx.setLineDash([]);
+    // FD sample points
+    [x0-eps,x0+eps].forEach(xp=>{
+      ctx.fillStyle=C.fd;ctx.beginPath();ctx.arc(tx(xp),ty(f(xp)),4,0,Math.PI*2);ctx.fill();
+      ctx.strokeStyle=C.fd;ctx.lineWidth=0.7;ctx.setLineDash([3,3]);
+      ctx.beginPath();ctx.moveTo(tx(xp),ty(f(xp)));ctx.lineTo(tx(xp),ty(0));ctx.stroke();ctx.setLineDash([]);
+    });
+    // Analytical tangent
+    const anSlope=fp(x0);
+    ctx.strokeStyle=C.an;ctx.lineWidth=2;ctx.beginPath();
+    ctx.moveTo(tx(x0-secL),ty(f(x0)+anSlope*(-secL)));ctx.lineTo(tx(x0+secL),ty(f(x0)+anSlope*(secL)));ctx.stroke();
+    // current point
+    ctx.fillStyle=C.curve;ctx.beginPath();ctx.arc(tx(x0),ty(f(x0)),5,0,Math.PI*2);ctx.fill();
+    // legend
+    const lx=W-200,ly=22;
+    ctx.fillStyle=C.fd;ctx.fillRect(lx,ly,14,3);ctx.fillStyle=C.fd;ctx.font='12px Inter,sans-serif';
+    ctx.fillText('中心差分  slope='+fdSlope.toFixed(4),lx+20,ly+5);
+    ctx.fillStyle=C.an;ctx.fillRect(lx,ly+18,14,3);ctx.fillStyle=C.an;
+    ctx.fillText('解析导数  slope='+anSlope.toFixed(4),lx+20,ly+23);
+    const err=Math.abs(fdSlope-anSlope);
+    ctx.fillStyle=C.muted;ctx.fillText('误差 = '+err.toExponential(2),lx+20,ly+41);
+  }
+  bind('fdX0',draw);bind('fdEps',draw);
+})();
+/* ============ Animation 2: Bicycle Model ============ */
+(function(){
+  const cv=document.getElementById('cvBicycle');if(!cv)return;
+  const ctx=cv.getContext('2d'),W=cv.width,H=cv.height;
+  const dt=0.2,L=2.8,sc=22,cx=180,cy=H/2;
+
+  function draw(){
+    const yaw=val('biYaw'),v=val('biV'),delta=val('biDelta');
+    show('biYawVal',yaw.toFixed(2));show('biVVal',v.toFixed(1));show('biDeltaVal',delta.toFixed(2));
+    ctx.clearRect(0,0,W,H);
+    // grid
+    ctx.strokeStyle=C.grid;ctx.lineWidth=0.5;
+    for(let i=-10;i<=10;i++){ctx.beginPath();ctx.moveTo(cx+i*sc*2,0);ctx.lineTo(cx+i*sc*2,H);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(0,cy+i*sc*2);ctx.lineTo(W,cy+i*sc*2);ctx.stroke();}
+    // vehicle body
+    const cosY=Math.cos(yaw),sinY=Math.sin(yaw);
+    const bw=4.8*sc,bh=2*sc;
+    ctx.save();ctx.translate(cx,cy);ctx.rotate(-yaw);
+    ctx.fillStyle='rgba(26,26,46,0.08)';ctx.strokeStyle=C.car;ctx.lineWidth=1.5;
+    ctx.beginPath();ctx.rect(-bw*0.3,-bh/2,bw,bh);ctx.fill();ctx.stroke();
+    // front wheel
+    const fwx=bw*0.6,fwy=0;
+    ctx.save();ctx.translate(fwx,fwy);ctx.rotate(-delta);
+    ctx.fillStyle=C.car;ctx.fillRect(-8,-3,16,6);ctx.restore();
+    // rear axle marker
+    ctx.fillStyle=C.car;ctx.beginPath();ctx.arc(0,0,3,0,Math.PI*2);ctx.fill();
+    ctx.restore();
+    // next state prediction
+    const nx=dt*v*cosY,ny=dt*v*sinY;
+    drawArrow(ctx,cx,cy,cx+nx*sc,cy-ny*sc,'#aaa',2);
+    // label next state
+    ctx.fillStyle=C.muted;ctx.font='11px Inter,sans-serif';
+    ctx.fillText('next',cx+nx*sc+5,cy-ny*sc-5);
+    // A,B matrix display
+    const mx=W-310,my=28;
+    ctx.fillStyle=C.curve;ctx.font='bold 13px Inter,sans-serif';ctx.fillText('A = df/dx',mx,my);
+    ctx.font='12px JetBrains Mono,monospace';
+    const A=[[1,0,(-dt*v*sinY).toFixed(2),(dt*cosY).toFixed(2)],
+             [0,1,(dt*v*cosY).toFixed(2),(dt*sinY).toFixed(2)],
+             [0,0,1,(dt*Math.tan(delta)/L).toFixed(3)],
+             [0,0,0,1]];
+    A.forEach((row,r)=>{
+      row.forEach((v2,c)=>{
+        const s=typeof v2==='number'?v2.toFixed(0):v2;
+        const highlight=(r===0&&c===2)||(r===0&&c===3)||(r===1&&c===2)||(r===1&&c===3)||(r===2&&c===3);
+        ctx.fillStyle=highlight?C.accent:'#666';
+        ctx.fillText(String(s).padStart(7),mx+c*70,my+18+r*18);
+      });
+    });
+    const by2=my+100;
+    ctx.fillStyle=C.curve;ctx.font='bold 13px Inter,sans-serif';ctx.fillText('B = df/du',mx,by2);
+    ctx.font='12px JetBrains Mono,monospace';
+    const cosD=Math.cos(delta);
+    const B=[[0,0],[0,0],[0,(dt*v/(L*cosD*cosD)).toFixed(3)],[dt.toFixed(1),0]];
+    B.forEach((row,r)=>{
+      row.forEach((v2,c)=>{
+        const s=typeof v2==='number'?v2.toFixed(0):v2;
+        const highlight=(r===2&&c===1)||(r===3&&c===0);
+        ctx.fillStyle=highlight?C.accent:'#666';
+        ctx.fillText(String(s).padStart(7),mx+c*90,by2+18+r*18);
+      });
+    });
+  }
+  bind('biYaw',draw);bind('biV',draw);bind('biDelta',draw);
+})();
+
+/* ============ Animation 3: Multi-circle rigid body ============ */
+(function(){
+  const cv=document.getElementById('cvMultiCircle');if(!cv)return;
+  const ctx=cv.getContext('2d'),W=cv.width,H=cv.height;
+  const sc=50,ox=W/2,oy=H/2+20;
+  const circles=[{bx:-1.0,r:1.2},{bx:0.8,r:1.2},{bx:2.6,r:1.0}];
+  const roadHalf=3.5;
+
+  function draw(){
+    const yaw=val('mcYaw');show('mcYawVal',yaw.toFixed(2));
+    const cosY=Math.cos(yaw),sinY=Math.sin(yaw);
+    ctx.clearRect(0,0,W,H);
+    // road boundaries
+    ctx.strokeStyle=C.road;ctx.lineWidth=2;ctx.setLineDash([8,6]);
+    ctx.beginPath();ctx.moveTo(0,oy-roadHalf*sc);ctx.lineTo(W,oy-roadHalf*sc);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(0,oy+roadHalf*sc);ctx.lineTo(W,oy+roadHalf*sc);ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle=C.muted;ctx.font='11px Inter,sans-serif';
+    ctx.fillText('road upper',10,oy-roadHalf*sc-6);ctx.fillText('road lower',10,oy+roadHalf*sc+14);
+    // center line
+    ctx.strokeStyle='#ddd';ctx.lineWidth=1;ctx.setLineDash([4,4]);
+    ctx.beginPath();ctx.moveTo(0,oy);ctx.lineTo(W,oy);ctx.stroke();ctx.setLineDash([]);
+    // vehicle body outline
+    ctx.save();ctx.translate(ox,oy);ctx.rotate(-yaw);
+    ctx.strokeStyle=C.car;ctx.lineWidth=1.5;ctx.fillStyle='rgba(26,26,46,0.06)';
+    const bw=4.8*sc,bh=2*sc;
+    ctx.beginPath();ctx.rect(-bw*0.25,-bh/2,bw,bh);ctx.fill();ctx.stroke();
+    ctx.restore();
+    // circles and jacobian arrows
+    circles.forEach((ci,idx)=>{
+      const px=ox+cosY*ci.bx*sc, py=oy-sinY*ci.bx*sc;
+      // circle
+      ctx.beginPath();ctx.arc(px,py,ci.r*sc,0,Math.PI*2);
+      ctx.fillStyle=C.circle;ctx.fill();ctx.strokeStyle=C.circleStroke;ctx.lineWidth=1.2;ctx.stroke();
+      // center dot
+      ctx.fillStyle=C.accent;ctx.beginPath();ctx.arc(px,py,3,0,Math.PI*2);ctx.fill();
+      // Jacobian arrow: dp/dtheta = [-sin(yaw)*bx, cos(yaw)*bx] (in world)
+      const jx=-sinY*ci.bx*sc*0.7, jy=-cosY*ci.bx*sc*0.7;
+      drawArrow(ctx,px,py,px+jx,py+jy,C.arrow,1.8);
+      // label
+      ctx.fillStyle=C.muted;ctx.font='11px Inter,sans-serif';
+      ctx.fillText('circle '+(idx+1),px+ci.r*sc+4,py+4);
+    });
+    // ego marker
+    ctx.fillStyle=C.car;ctx.beginPath();ctx.arc(ox,oy,4,0,Math.PI*2);ctx.fill();
+  }
+  bind('mcYaw',draw);
+})();
+/* ============ Animation 4: AL Penalty ============ */
+(function(){
+  const cv=document.getElementById('cvAL');if(!cv)return;
+  const ctx=cv.getContext('2d'),W=cv.width,H=cv.height;
+  const xMin=-2,xMax=4,yMin=-0.5,yMax=10;
+  function tx(x){return 50+(x-xMin)/(xMax-xMin)*(W-80);}
+  function ty(y){return H-35-(y-yMin)/(yMax-yMin)*(H-60);}
+
+  function draw(){
+    const lam=val('alLam'),mu=val('alMu'),b=val('alB');
+    show('alLamVal',lam.toFixed(2));show('alMuVal',mu.toFixed(1));show('alBVal',b.toFixed(1));
+    ctx.clearRect(0,0,W,H);
+    // grid
+    ctx.strokeStyle=C.grid;ctx.lineWidth=0.5;
+    for(let x=-2;x<=4;x++){ctx.beginPath();ctx.moveTo(tx(x),ty(yMin));ctx.lineTo(tx(x),ty(yMax));ctx.stroke();}
+    for(let y=0;y<=10;y+=2){ctx.beginPath();ctx.moveTo(tx(xMin),ty(y));ctx.lineTo(tx(xMax),ty(y));ctx.stroke();}
+    // axes
+    ctx.strokeStyle='#bbb';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(tx(xMin),ty(0));ctx.lineTo(tx(xMax),ty(0));ctx.stroke();
+    // constraint boundary
+    ctx.strokeStyle=C.red;ctx.lineWidth=1.5;ctx.setLineDash([6,4]);
+    ctx.beginPath();ctx.moveTo(tx(b),ty(yMin));ctx.lineTo(tx(b),ty(yMax));ctx.stroke();ctx.setLineDash([]);
+    ctx.fillStyle=C.red;ctx.font='12px Inter,sans-serif';ctx.fillText('x = b (boundary)',tx(b)+5,ty(yMax-0.5));
+    // feasible region shading
+    ctx.fillStyle='rgba(74,110,90,0.05)';ctx.fillRect(tx(xMin),ty(yMax),tx(b)-tx(xMin),ty(yMin)-ty(yMax));
+    ctx.fillStyle='rgba(139,64,73,0.05)';ctx.fillRect(tx(b),ty(yMax),tx(xMax)-tx(b),ty(yMin)-ty(yMax));
+    ctx.fillStyle=C.muted;ctx.font='11px Inter,sans-serif';
+    ctx.fillText('feasible',tx(xMin)+8,ty(yMax-0.3));ctx.fillText('infeasible',tx(b)+8,ty(yMax-0.3)+14);
+
+    const step=(xMax-xMin)/400;
+    // base cost: 0.5*x^2
+    ctx.strokeStyle=C.blue;ctx.lineWidth=1.5;ctx.beginPath();
+    for(let x=xMin;x<=xMax;x+=step){const y=0.5*x*x;if(x===xMin)ctx.moveTo(tx(x),ty(y));else ctx.lineTo(tx(x),ty(y));}
+    ctx.stroke();
+    // AL penalty only
+    ctx.strokeStyle=C.orange;ctx.lineWidth=1.5;ctx.beginPath();
+    for(let x=xMin;x<=xMax;x+=step){
+      const c=x-b,s=lam+mu*c,p=Math.max(0,s);
+      const phi=(p*p-lam*lam)/(2*mu);
+      if(x===xMin)ctx.moveTo(tx(x),ty(phi));else ctx.lineTo(tx(x),ty(Math.min(phi,yMax)));
+    }ctx.stroke();
+    // total augmented cost
+    ctx.strokeStyle=C.green;ctx.lineWidth=2.5;ctx.beginPath();
+    let minX=0,minY=1e9;
+    for(let x=xMin;x<=xMax;x+=step){
+      const c=x-b,s=lam+mu*c,p=Math.max(0,s);
+      const phi=(p*p-lam*lam)/(2*mu);
+      const total=0.5*x*x+phi;
+      if(total<minY){minY=total;minX=x;}
+      if(x===xMin)ctx.moveTo(tx(x),ty(total));else ctx.lineTo(tx(x),ty(Math.min(total,yMax)));
+    }ctx.stroke();
+    // optimal point marker
+    ctx.fillStyle=C.green;ctx.beginPath();ctx.arc(tx(minX),ty(minY),5,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle=C.curve;ctx.font='12px Inter,sans-serif';
+    ctx.fillText('x* = '+minX.toFixed(2),tx(minX)+8,ty(minY)-6);
+    // legend
+    const lx=60,ly=18;
+    [[C.blue,'base cost  ½x²'],[C.orange,'AL penalty  φ(x)'],[C.green,'augmented total']].forEach(([c,t],i)=>{
+      ctx.strokeStyle=c;ctx.lineWidth=i===2?2.5:1.5;ctx.beginPath();ctx.moveTo(lx,ly+i*17);ctx.lineTo(lx+20,ly+i*17);ctx.stroke();
+      ctx.fillStyle=C.curve;ctx.font='12px Inter,sans-serif';ctx.fillText(t,lx+26,ly+i*17+4);
+    });
+  }
+  bind('alLam',draw);bind('alMu',draw);bind('alB',draw);
+})();
+</script>
+</body>
+</html>

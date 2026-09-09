@@ -1,0 +1,59 @@
+# AL-iLQR Parameters for Go2
+vehicle:
+  wheelbase: 0.4
+  max_speed: 1.0
+  min_speed: -0.3
+  max_acceleration: 1.5
+  min_acceleration: -2.0
+  max_steering: 0.6
+  min_steering: -0.6
+  length: 0.6
+  width: 0.4
+  rear_axle_to_rear: 0.15
+  collision_circle_count: 1
+
+solver:
+  horizon: 20
+  dt: 0.1
+  max_outer_iterations: 4
+  max_inner_iterations: 15
+  initial_penalty: 20.0
+  penalty_scaling: 5.0
+  constraint_tolerance: 0.1
+
+weights:
+  position_weight: 5.0
+  heading_weight: 2.0
+  speed_weight: 1.0
+  terminal_position_weight: 8.0
+  terminal_heading_weight: 4.0
+  terminal_speed_weight: 2.0
+  accel_reg_weight: 0.2
+  steering_reg_weight: 0.4
+
+planning:
+  rate: 10.0
+  ref_speed: 1.0
+  guidance_lookahead: 25
+
+road:
+  lower_bound: -5.0
+  upper_bound: 5.0
+
+obstacle:
+  safety_radius: 0.35
+  scan_max_range: 5.0
+  scan_topic: "/scan"
+  clustering_distance: 0.3
+  min_obstacle_radius: 0.1
+
+path:
+  curvature_weight: 0.5
+  min_speed: -0.3
+  max_speed: 1.0
+
+control_mapping:
+  virtual_wheelbase: 0.4
+  max_linear_vel: 1.0
+  max_angular_vel: 1.5
+  cmd_vel_topic: "/cmd_vel"

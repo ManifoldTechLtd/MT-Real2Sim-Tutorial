@@ -1,0 +1,4 @@
+# sim_bridge 参数
+tcp_host: "localhost"
+tcp_port: 9090
+reconnect_interval: 2.0

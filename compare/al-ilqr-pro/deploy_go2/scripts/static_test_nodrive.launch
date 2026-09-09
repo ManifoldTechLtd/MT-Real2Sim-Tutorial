@@ -1,0 +1,99 @@
+<launch>
+  <!-- ============================================================
+       Phase 3 静态验证专用 launch（NO-DRIVE 安全版）
+       内容 = map_planner/launch/whole.launch 去掉以下两处：
+         1) unitree_control 节点 (vel_to_sdk) —— 会驱动机器人，静态验证禁止启动
+         2) foxglove_bridge include —— 无头 NX 上非必需
+       其余（map_server / map_planner / 静态 TF / pc_to_scan / fake360）
+       与 NX 原 whole.launch 完全一致，scan 高度过滤保持 NX 原值
+       (min_height=0.0, max_height=0.3, fake360_cell_decay_sec=3.0)，未做改动。
+       依赖 overlay：source ~/code_ilqr/devel/setup.bash 后 $(find map_planner) 可解析。
+       ============================================================ -->
+
+  <arg name="map_topic" default="/map" />
+  <arg name="map_file_name" default="map_opt" />
+  <arg name="goal_topic" default="/move_base_simple/goal" />
+  <arg name="path_topic" default="/initial_path" />
+  <arg name="service_name" default="/map_planner/plan" />
+  <arg name="inflation_radius" default="0.25" />
+  <arg name="inflated_map_topic" default="/inflated_map" />
+  <arg name="publish_path" default="true" />
+  <arg name="arrive_topic" default="/neupan/arrive" />
+  <arg name="smoothing_iterations" default="20" />
+  <arg name="smoothing_max_deviation_m" default="0.20" />
+  <arg name="use_fake360" default="true" />
+  <arg name="fake360_cell_decay_sec" default="3.0" />
+
+  <!-- Map Server -->
+  <node pkg="map_server" type="map_server" name="map_server" output="screen"
+        args="$(find map_planner)/maps/$(arg map_file_name).yaml">
+    <remap from="/map" to="$(arg map_topic)" />
+  </node>
+
+  <arg name="obstacle_cost_weight" default="3.0" />
+  <arg name="obstacle_cost_safe_distance" default="0.5" />
+  <arg name="line_of_sight_safe_distance" default="0.25" />
+  <arg name="start_heading_penalty_weight" default="2.0" />
+  <arg name="start_heading_penalty_radius_m" default="1.0" />
+
+  <!-- Map A* Planner -->
+  <node pkg="map_planner" type="map_planner" name="map_planner" output="screen">
+    <param name="inflation_radius" value="$(arg inflation_radius)" />
+    <param name="service_name" value="$(arg service_name)" />
+    <param name="publish_path" value="$(arg publish_path)" />
+    <param name="smoothing_iterations" value="$(arg smoothing_iterations)" />
+    <param name="smoothing_max_deviation_m" value="$(arg smoothing_max_deviation_m)" />
+    <param name="obstacle_cost_weight" value="$(arg obstacle_cost_weight)" />
+    <param name="obstacle_cost_safe_distance" value="$(arg obstacle_cost_safe_distance)" />
+    <param name="line_of_sight_safe_distance" value="$(arg line_of_sight_safe_distance)" />
+    <param name="start_heading_penalty_weight" value="$(arg start_heading_penalty_weight)" />
+    <param name="start_heading_penalty_radius_m" value="$(arg start_heading_penalty_radius_m)" />
+    <remap from="map" to="$(arg map_topic)" />
+    <remap from="/move_base_simple/goal" to="$(arg goal_topic)" />
+    <remap from="initial_path" to="$(arg path_topic)" />
+    <remap from="inflated_map" to="$(arg inflated_map_topic)" />
+  </node>
+
+  <!-- Static TF -->
+  <node pkg="tf2_ros" type="static_transform_publisher" name="odin1_to_base"
+        args="-0.3 0 0 0 0 0 odin1_base_link base_link" />
+  <node pkg="tf2_ros" type="static_transform_publisher" name="odin1_to_lidar"
+        args="0.00347 0.03447 0.02174 0 0 0 1 odin1_base_link odin1_lidar_link" />
+  <node pkg="tf2_ros" type="static_transform_publisher" name="lidar_to_camera"
+        args="0.02055 0.0004 -0.00735 0.497 -0.499 0.499 0.504 odin1_lidar_link odin1_camera_link" />
+
+  <!-- ***** unitree_control (vel_to_sdk) 节点在此被刻意移除，静态验证不驱动机器人 ***** -->
+
+  <!-- Pointcloud to LaserScan（保持 NX 原值 min_height=0.0 / max_height=0.3） -->
+  <node pkg="pointcloud_to_laserscan" type="pointcloud_to_laserscan_node" name="pc_to_scan" output="screen">
+    <param name="target_frame"        value="odin1_base_link"/>
+    <param name="transform_tolerance" value="0.1"/>
+    <param name="min_height"          value="0.0"/>
+    <param name="max_height"          value="0.3"/>
+    <param name="angle_min"           value="-0.7853"/>
+    <param name="angle_max"           value="0.7853"/>
+    <param name="angle_increment"     value="0.017"/>
+    <param name="scan_time"           value="0.1"/>
+    <param name="range_min"           value="0.2"/>
+    <param name="range_max"           value="5.0"/>
+    <remap from="cloud_in" to="/odin1/cloud_slam"/>
+    <remap from="scan"     to="/scan"/>
+  </node>
+
+  <!-- Fake 360 scan -->
+  <node pkg="fake360" type="fake360_node" name="fake360_node" output="screen"
+        if="$(arg use_fake360)">
+    <param name="map_frame" value="odom" />
+    <param name="base_frame" value="odin1_base_link" />
+    <param name="input_scan_topic" value="/scan" />
+    <param name="fake_scan_topic" value="/scan_360" />
+    <param name="map_topic" value="/fake_map" />
+    <param name="range_min" value="0.05" />
+    <param name="max_fake_range" value="4.5" />
+    <param name="output_points" value="360" />
+    <param name="resolution" value="0.05" />
+    <param name="width" value="400" />
+    <param name="height" value="400" />
+    <param name="cell_decay_sec" value="$(arg fake360_cell_decay_sec)" />
+  </node>
+</launch>

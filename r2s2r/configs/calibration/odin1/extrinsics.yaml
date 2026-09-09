@@ -1,0 +1,52 @@
+# ========================================
+# odin1 传感器套件外参配置 (分层格式)
+# ========================================
+#
+# 约定:
+#   translation: [x, y, z] 单位: 米
+#   rotation: [w, x, y, z] 四元数 (Hamilton, scalar-first)
+#
+# 层级结构:
+#   ref_imu (rimu) 定义套件安装变换 T_body_rimu
+#   sensors 中各传感器 extrinsics 为 T_rimu_sensor
+#
+# 原始变换矩阵 (供参考):
+#   Tcl_0 (camera → body):
+#     [[-0.00745, -0.99997, -0.00018,  0.03127],
+#      [-0.00938,  0.00025, -0.99996,  0.01817],
+#      [ 0.99993, -0.00745, -0.00938, -0.00955],
+#      [ 0,        0,        0,        1      ]]
+#
+#   body_T_lidar:
+#     [[ 0.99995, -0.00944,  0.00430, -0.02810],
+#      [ 0.00951,  0.99982, -0.01649,  0.02410],
+#      [-0.00414,  0.01653,  0.99985,  0.03456],
+#      [ 0,        0,        0,        1      ]]
+
+# 参考 IMU (rimu) — 套件安装基准
+ref_imu:
+  name: imu_center
+  frequency: 200
+  # T_body_rimu: 安装变换 (含仿真 z 偏移 0.20m)
+  mount_extrinsics:
+    translation: [0.0, 0.0, 0.50]
+    rotation: [1.0, 0.0, 0.0, 0.0]
+
+# 其余传感器，extrinsics 均为 T_rimu_sensor (相对于 ref_imu)
+sensors:
+  camera1:
+    type: camera
+    intrinsics_file: "intrinsics_camera1.yaml"
+    extrinsics:                              # T_rimu_camera1
+      # Camera() uses ROS convention: identity = look +X, up +Z.
+      # Tcl_0 小角度扰动 → 近 identity 四元数 (FLU 坐标系下 rimu→cam 旋转)
+      translation: [0.009953, 0.031194, 0.018085]
+      rotation: [0.99998, 0.00011, 0.00469, -0.00373]
+
+  lidar1:
+    type: lidar
+    intrinsics_file: "intrinsics_lidar1.yaml"
+    extrinsics:                              # T_rimu_lidar1
+      # body_T_lidar 四元数 (rimu=body center → T_rimu_lidar = T_body_lidar)
+      translation: [-0.02810, 0.02410, 0.03456]
+      rotation: [0.99995, 0.00826, 0.00211, 0.00474]

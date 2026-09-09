@@ -1,0 +1,8 @@
+# Go2 (Go2FlatTerrainPolicy) sim_bridge 静态 TF 偏移
+#
+# 暂沿用 Spot 默认值; Go2 真实站立高度约 0.32m, 后续校准时独立调整.
+
+base_height: 0.237
+sensor_base_offset_xyz: [0.0, 0.0, 0.8]
+camera_offset_xyz: [0.3, 0.0, 0.6]
+imu_offset_xyz: [0.0, 0.0, 0.5]

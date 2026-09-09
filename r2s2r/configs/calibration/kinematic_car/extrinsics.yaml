@@ -1,0 +1,36 @@
+# ========================================
+# 履带车 K02 传感器套件外参 (运动学车专用)
+# ========================================
+# 与 calibration/pinhole/ 区别:
+#   - base_link 不再是 Spot/Go2 的 body, 而是履带车几何中心 (距地 0.20m).
+#   - mount_extrinsics.translation.z 调整为 0.0, 使
+#     lidar 离地高度 = base_link_z(0.20) + mount.z(0.0) + lidar_ext.z(0.30) = 0.50m,
+#     与真机 K02 lidar1 挑高 0.5m 一致.
+#
+# 约定:
+#   translation: [x, y, z] 单位米
+#   rotation:    [w, x, y, z] Hamilton 四元数 (scalar-first)
+
+ref_imu:
+  name: imu_center
+  frequency: 200
+  # T_base_link_rimu: 套件挂在 base_link 上方 (履带车这里恰好同高).
+  mount_extrinsics:
+    translation: [0.0, 0.0, 0.0]
+    rotation: [1.0, 0.0, 0.0, 0.0]
+
+# 各传感器 extrinsics 为 T_rimu_sensor (相对 ref_imu)
+sensors:
+  camera1:
+    type: camera
+    intrinsics_file: "intrinsics_camera1.yaml"
+    extrinsics:                              # T_rimu_camera1
+      translation: [0.3, 0.0, 0.1]          # rimu 前方 0.3m, 略高
+      rotation: [0.9961947, 0.0, -0.0871557, 0.0]   # 绕 Y 轴 -10 度 (略朝下)
+
+  lidar1:
+    type: lidar
+    intrinsics_file: "intrinsics_lidar1.yaml"
+    extrinsics:                              # T_rimu_lidar1
+      translation: [0.0, 0.0, 0.3]          # rimu 上方 0.3m -> 离地 0.5m
+      rotation: [1.0, 0.0, 0.0, 0.0]

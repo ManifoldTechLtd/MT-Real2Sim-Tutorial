@@ -1,0 +1,287 @@
+<?xml version="1.0"?>
+<!--
+  v2 Phase 1: 在仿真中跑通 path_detect (A/B) + traversability_node (D) + scan_filter (E)
+                                                              + passability_fuser (G)
+
+  数据流:
+    /registered_scan (PC2, frame=lidar1)
+        └─ path_detect (订阅 /point_cloud/input)
+              ├─ /path_detect/ground_cloud   (PointCloud2, 地面点云, frame=map)
+              ├─ /path_detect/ground_map     (OccupancyGrid, 全局地面占据栅格)
+              │     └─ traversability_node
+              │           ├─ /traversability/passability_grid (OccupancyGrid)
+              │           │       ├─ scan_filter_node ─┐
+              │           │       └─ passability_fuser ─┐
+              │           └─ /traversability/scene_hint (String)
+              ├─ /path_detect/local_map_filled (OccupancyGrid, 局部填洞地图)
+              └─ /scan/path_detect            (LaserScan, 路径补充 scan) 
+
+    /scan (LaserScan, grid_mapper 链路) ───────────────────┴─→ /scan_filtered
+                                                              (SLOPE 方向 = inf)
+
+    /map/whole (grid_mapper 累积占据) ──┐
+                                       └→ passability_fuser → /map/whole_traversable
+    /traversability/passability_grid ──┘    (Step G, 给 map_planner A* 用)
+
+  前置条件:
+    1. sim_bridge/bridge.launch 已运行 (TF 树 + /registered_scan + /scan)
+    2. /tools/setup_k02_overlay.sh 已编译 path_detect + traversability + scan_filter
+
+  参数说明:
+    lidar_height: lidar 相对 base_footprint 的高度 (m), 仅作 base_footprint TF
+                  查询失败时的 fallback. 履带车 K02 = 0.50 (base_link 0.20 +
+                  sensor_base 0.30), Spot = 1.037 (0.237 + 0.8). 默认对齐当前
+                  默认机器人 (kinematic_car). 切换 spot/go2 时一并改这里.
+    其他参数沿用真机 whole.launch 中 path_detect 的设置。
+-->
+<launch>
+
+  <node pkg="path_detect" type="path_detect_node" name="path_detect" output="screen">
+    <!-- Geometry / 仿真特化 (履带车 K02 实测 0.545; Spot = 1.037; Go2 ≈ 1.12)
+         lidar 底面距地 545 mm (用户 2026-05-19 实测), 距车头 100 mm -->
+    <param name="lidar_height"            value="0.545"/>
+
+    <!-- 算法参数 (与真机 path_detect.launch 一致, 见 progress.md P13)  -->
+    <!-- normal_angle_threshold: 仿真比真机更严（10° vs 30°），先对齐到真机 30° -->
+    <!-- grow_angle_threshold: 仿真比真机更严（5° vs 10°），先对齐到真机 10° -->
+    <!-- 太小识别不到掌子面前的坡面 -->
+    <param name="downsample_res"          value="0.1"/>
+    <param name="normal_angle_threshold"  value="30.0"/>
+    <param name="grow_angle_threshold"    value="10.0"/>
+    <!-- search_radius: P13 用 0.4 稀释凹凸地面 outlier; Step G (2026-05-19) 改回 0.2,
+         因 0.4 邻域在栈桥上同时吃到面板 + 栏杆/加强筋, PCA 拟合出近垂直法向 ->
+         BLOCK 纵向条纹. 用 0.2 让 PCA 局部化, 栈桥面板和栏杆点不混. 副作用是
+         凹凸地面 outlier 上升, 由 traversability_node `min_block_cluster_cells` 兜底. -->
+    <param name="search_radius"           value="0.2"/>
+    <param name="z_tolerance"             value="0.3"/>
+    <param name="grow_z_tolerance"        value="0.3"/>
+    <param name="hole_fill_z_threshold"   value="0.3"/>
+    <param name="enable_hole_filling"     value="false"/>
+    <param name="detect_vertical_plane"   value="false"/>
+
+    <!-- 虚拟 scan 输出 -->
+    <param name="unknown_is_free"         value="false"/>
+    <param name="scan_range_max"          value="20.0"/>
+    <param name="scan_num_beams"          value="360"/>
+
+    <!-- Open-12 v2 (2026-05-25): cap PCA cell-write radius. 远端点云稀疏导致
+         PCA 法向噪声大, 误把 cell 标 BLOCK, 直到机器人靠近才被 latest-wins 覆盖.
+         8 m ~ Isaac Sim Odin1 lidar 可用密度边界, 远墙仍由 grid_mapper /scan
+         链路记录, 不影响 base_map. **真机部署改 100 (≈关闭)** 或谨慎调到
+         12-15 m 让大空间感知不被砍掉.
+
+         v2: out-of-range cell 写 RANGE_GATE_SENTINEL=110 (而非 -1),
+         traversability `_classify` 映射 110 → P_NORMAL. 解决 v1 中
+         "passability 远端 UNKNOWN 经 fuser 让 A* 全失败" + "Open-13 在
+         max_classify_range 圆周产生 BLOCK 环" 两个复合问题. 详见
+         progress.md Open-12. -->
+    <param name="max_classify_range"      value="8.0"/>
+
+    <!-- Open-14 P2.1: per-cell PCA 置信度门控. cell 命中点数 < N 跳过 PCA
+         强制写 -1 (UNKNOWN).
+
+         **历次决定 timeline (重要, 防止再次误判)**:
+
+         2026-05-25 v1 启用 N=3 → 失败. 关闭 N=0.
+         2026-05-26 早 v2 重启 N=3 (基于 Image 2 蓝紫密集误判为高密度) → 失败.
+         2026-05-26 下午 v3 关闭 N=0. **当前**.
+
+         **v3 关闭的硬证据 (terminal log 2026-05-26 14:15)**:
+         ```
+         classify: total=2764 close=1601 sentinel=1163 low_conf=606
+         ```
+         - 0.1m grid, 8m 范围内 cell 数 ~5024 (πr²/res²)
+         - 实际有点 cell = close=1601, 单帧总点 2764 → 平均 1.7 点/cell
+         - N=3 门控掉 606 (= 38% of close) → 桥面/空地被错杀, RViz 大片灰色
+         - **结论: sim Odin1 lidar 0.1m grid 上密度严重不足, 无法支持 P2.1**
+
+         **不要再轻易启用 P2.1 in sim**. 想启用前必须满足:
+         1. downsample_res 0.1 → 0.15 或 0.2 (每 cell 点数 ~2.25-4 倍)
+         2. 或换更密 lidar (sim Odin1 sensor model 拟合得稍稀疏)
+         3. 改后重新看 `low_conf / close` 比例 < 10% 才可启用
+
+         **真机部署**: 真机 Velodyne / Livox 密度高, 可试 N=3, 看 log 比例.
+
+         **cliff 残留改由其他手段防御**:
+         - Open-18 danger_floor_deg=22 (锁高角度 cell, 防低翻转)
+         - Open-19 clear_sentinel_in_range (清 sentinel)
+         - Open-13 walkable_unknown_boundary (dilate UNKNOWN 边界)
+         - 最终物理上限改由 Open-11 (DINOv3) 或 Open-8 (Octomap) -->
+    <param name="min_points_per_cell"     value="0"/>
+
+    <!-- Open-18 (2026-05-25 实施 / 2026-05-26 sentinel 解封后重启):
+         angle-floor merge. cumulative 中已写入 ≥ N° 的 cell 不被 < N° 覆盖.
+
+         **2026-05-26 重启原因**:
+         Open-19 解封 sentinel 后, cliff cell 在 8m 内开始接 PCA. Image 2
+         显示 cliff 区有少量紫色 (≥70° BLOCK) + 绿色 (50-70° RISK) — 即
+         部分 cliff cell 确实经历过高角度阶段. 然后被 lucky NORMAL 覆盖
+         (Image 2 大量蓝色). Open-18 floor 现在能阻止这种"高→低翻转".
+
+         **与 P2.1 互补**:
+         - P2.1: 防 "cliff cell 第一次就被 lucky NORMAL 写入" (主路径)
+         - Open-18: 防 "cliff cell 先高后低被翻转" (次路径)
+
+         **N=22 sim 选择**:
+         - sim 桥面 PCA 通常 0-15°, 偶发 18-20° (Image 2 蓝色) → 不锁
+         - cliff edge 真正高角度通常 ≥ 30° → 锁住 OK
+         - 22° 给桥面留 buffer, 比 v1 提案 25° 略严格
+
+         **风险**: 桥面坑洼 PCA 偶发 25° 被锁住, 显示永久 RISK strip.
+         不影响通行性 (RISK 仍 walkable in passability), 视觉次要.
+
+         **真机 N=30**: 真机 Velodyne 密度高 PCA 噪声更小, 30° 更稳. -->
+    <param name="danger_floor_deg"        value="22"/>
+
+    <!-- Open-19 (2026-05-26): sentinel cleanup near robot. 解决 "NeuPAN 转弯
+         走悬崖"真因 — Open-12 v2 sentinel 110 (out-of-range 标记) 在 cumulative
+         ground_map 卡死, traversability 把 110 映射成 P_NORMAL 让 cliff cells
+         在累积图永远显示 walkable. 启用后, cloudCallback 每帧扫描机器人 8m
+         (= max_classify_range) 圆内, 把 sentinel cell 清成 -1, 让 Open-13
+         walkable_unknown_boundary dilate 成 BLOCK strip.
+         **关键耦合**: 必须 max_classify_range > 0 (= 启用 Open-12 v2 range gate)
+         才有意义. 默认 true 因为 sim 已启用 range gate (8m).
+         性能 sim ~28k checks/s, 真机 ~450 checks/s, 可忽略.
+         真机 max_classify_range=100 (≈关闭 gate) 时本参数自动 no-op.
+         详见 progress.md Open-19 -->
+    <param name="clear_sentinel_in_range" value="true"/>
+
+    <!-- Topic remap: 仿真侧点云源 -->
+    <remap from="/point_cloud/input"      to="/registered_scan"/>
+    <remap from="ground_cloud"            to="/path_detect/ground_cloud"/>
+    <remap from="ground_map"              to="/path_detect/ground_map"/>
+    <remap from="local_map_filled"        to="/path_detect/local_map_filled"/>
+    <remap from="scan/path_detect"        to="/scan/path_detect"/>
+  </node>
+
+  <!-- v2 Phase 1 Step D: 把 ground_map (坡度度数) 映射成 passability + scene_hint
+       Step G 调试 (2026-05-19):
+         iter1: max_slope_deg 22→30, 解决栈桥中段被判 RISK.
+         iter2: max_slope_deg 30→35, 解决栈桥后端仍被判 RISK 阻塞.
+         iter3: max_slope_deg 35→45. 用户观察栈桥钢筋粗糙暴露, PCA 法向估计
+                把真实 ~25° 坡度算成 35-50°. 45° 故意超过 K02 物理 40° 上限,
+                目的是吸收 PCA 高估噪声. tradeoff: 真实 40-45° 陡坡也会被判
+                SLOPE, 仿真 debug 阶段靠驾驶员把关; 真机部署前应回退到 40°. -->
+  <node pkg="traversability" type="traversability_node.py"
+        name="traversability_node" output="screen">
+    <param name="slope_threshold_deg"   value="10.0"/>
+    <param name="max_slope_deg"         value="45.0"/>
+    <param name="risk_max_deg"          value="60.0"/>
+    <param name="scene_hint_radius"     value="2.0"/>
+    <param name="scene_hint_block_pct"  value="0.3"/>
+    <param name="scene_hint_slope_pct"  value="0.3"/>
+    <param name="robot_frame"           value="base_link"/>
+    <param name="publish_rate"          value="2.0"/>
+    <!-- E1: 连通域形态学过滤, 解决凹凸地面"碎花椒灰". 0=禁用, 默认30 (~0.3 m^2 @ 0.1m/cell) -->
+    <param name="min_slope_area_cells"  value="30"/>
+    <!-- P17/Step G: BLOCK 连通域过滤. 解决栈桥栏杆/加强筋造成的 PCA 噪声 BLOCK 条纹.
+         小于 N cells 的 BLOCK 簇降级为 NORMAL. 真墙体几百到几千 cells 不会被误删. -->
+    <param name="min_block_cluster_cells" value="20"/>
+    <!-- Step G.7 (2026-05-19): RISK 连通域过滤. 解决 PCA 坡面/栏杆造成的椒盐 RISK
+         被 fuser risk_inflation_meters 放大为菱形黑块阻塞通行. 真悬崖是连续轮廓
+         (几十到几百 cells), 20 阈值安全. **真机部署前应回退到 0** 避免误删窄悬崖. -->
+    <param name="min_risk_cluster_cells" value="20"/>
+    <!-- Step G.9 (2026-05-19): context-aware 内部伪障碍过滤. RISK∪BLOCK 合并连通域
+         若大小 ≤ N 且 boundary UNKNOWN 比例 ≤ unknown_tolerance, 整团降级 NORMAL.
+         解决栈桥面 PCA artifact (BLOCK中心+RISK光晕) 阻塞通行.
+         500 cells = 5 m² @ 0.1m格. 真悬崖/真墙是连续轮廓 boundary 含大量 UNKNOWN.
+         **真机部署必须设为 0**: 走廊孤立柱子也会被误删. -->
+    <param name="internal_obstacle_max_size_cells" value="500"/>
+    <!-- Step G.9 修正: path_detect 桥面中央会有零星 UNKNOWN cell 造成 filter 误保留.
+         tolerance=0.5 允许 boundary 50% UNKNOWN 仍判定为内部伪障碍.
+         真悬崖/真墙 boundary 通常 >70% UNKNOWN, 0.5 阈值仍能保护它们. -->
+    <param name="internal_obstacle_unknown_tolerance" value="0.5"/>
+    <!-- Open-7 (2026-05-25): _filter_internal_obstacles 的对偶, 删孤立可通行小簇
+         解决 "桥头/桥尾小平面 PCA 错分 NORMAL → A* 走过去掉桥" (Open-1 reincarnation).
+         NORMAL∪SLOPE 簇 ≤ N 且 boundary NORMAL/SLOPE 比例 ≤ normal_tolerance → 整团降级 RISK.
+         200 cells = 2 m² @ 0.1m格. 真桥通过 SLOPE 缓坡连地面 boundary 含 NORMAL/SLOPE.
+         **真机部署必须设为 0**: sim 启动初期真桥可能未连接, 启用会误删. -->
+    <!-- Open-22 (2026-05-26): 试过 200→500, log 显示主桥面是 1 个 92180 cells 的
+         超大连通簇 (kept_too_big), 桥前段 cliff cells 接到这个超大簇内部.
+         filter 阈值放大无用 (永远删不到 92180 大簇), 反而误删中等 walkable 簇.
+         **回退 200**. 真正修复 cliff 残留需要"簇内部 cell"维度的判定, 不是 size,
+         待 Open-26 (新): walkable 簇内部"角度方差"或"高度断层"过滤. -->
+    <param name="isolated_walkable_max_size_cells" value="200"/>
+    <!-- Open-7 (2026-05-25): boundary NORMAL/SLOPE 比例允许上限, 0.0=严格 (boundary 必须
+         全是 UNKNOWN/RISK/BLOCK 才过滤). 0.0 是最安全的设定, 真桥几乎都有 SLOPE 连接. -->
+    <param name="isolated_walkable_normal_tolerance" value="0.0"/>
+
+    <!-- Open-26 (2026-05-27): 形态学 opening 切窄 walkable tendril, 解决 Open-22
+         复发的"PCA 伪平面经窄颈连主桥导致 A* 走过去掉桥". erode N + dilate N,
+         宽度 < 2N+1 cells 的 walkable strip 被切除降级 RISK; 宽度 ≥ 2N+1 的连续
+         区域**像素级保留** (不影响桥识别精度).
+
+         N=4 → kernel 9x9 (0.9m). 真桥 ≥ 0.9m 完整保留 (机器人 0.77m 物理可
+         通行下限), 比 0.9m 窄的"桥"机器人本来过不去. 杀 < 0.9m 直径的伪平面.
+
+         Pipeline 顺序: 必须在 _filter_isolated_walkable (Open-7) 之前 — opening
+         切断窄颈使伪 patch 变为孤立小簇, Open-7 接力降级 RISK.
+
+         **真机部署**: 先用 N=3 (kernel 7x7 = 0.7m) 测一下, 如桥被全删再降到 N=2
+         或关闭. 真桥若过窄 (<0.9m) 用 0 关闭, 改用 Open-7 + Open-13 防御.
+
+         未来 (Open-11 DINOv3 接入后): 视觉 mask 可以直接用语义判定栈桥
+         "bridge / non-bridge", 这个形态学过滤可以关掉. -->
+    <param name="walkable_min_corridor_cells"      value="4"/>
+
+    <!-- Open-13 (2026-05-25): 悬崖防御. walkable cell 距 UNKNOWN ≤ N 格的 strip
+         强制降级 RISK / BLOCK, 解决"桥侧悬崖被 grid_mapper(OCC)+path_detect(SLOPE)
+         合谋解除为 FREE 让 A* 贴边掉桥". 仿真 cells=2-3 (~20-30 cm) + mode=block
+         强制 A* 走桥中央. **真机部署前必须降到 cells=1 + mode=risk + 配合 fuser
+         risk_inflation_meters=0.2** 否则窄走廊会被全标 OCC, A* 规划失败.
+
+         Open-12 v2 (2026-05-25 同日修订): sentinel cell 经 _classify → P_NORMAL,
+         **不参与本过滤的 unknown_mask**, 故 8m gate 不再产生圆周 BLOCK 环.
+         真 UNKNOWN 边界 (永远没观测过 / 桥侧悬崖空气) 仍正常触发. -->
+    <!-- Open-16 (2026-05-25): cells 3 → 2 配合 map_planner.inflation_radius 0.55 → 0.30
+         总 inflation chain 从 0.85 m 降到 0.50 m, 1.8 m 桥剩 0.8 m 走廊够过.
+         真机改回 cells=1 + mode=risk + map_planner.inflation_radius=0.55.
+         Open-17 (2026-05-25): 用户尝试 cells=3 → 部分桥被堵, 改回 2 用 A*
+         proximity-weighted (sim_map_planner.launch proximity_weight=3.0)
+         偏中线策略, 不再用更激进 cells 强推中线. -->
+    <param name="walkable_unknown_boundary_cells"  value="2"/>
+    <param name="walkable_unknown_boundary_mode"   value="block"/>
+
+    <!-- Open-14 P2.2 (2026-05-25): temporal hysteresis. cell 一旦 RISK/BLOCK/
+         UNKNOWN, 需连续 N 帧 walkable 才允许 revert. 与 P2.1 协同.
+         **2026-05-25 同日实测**: P2.1 关闭后, P2.2 单独使用风险也大 — 任何
+         偶发 RISK/BLOCK (例如 PCA 在斜面上误报) 都会被锁 N 帧, "走过去无法
+         更新掉地图"是这个表现的典型症状. **默认 0 = 关闭**.
+         想启用前: 先确认 P1 已让 ground_map 稳定 (闪烁很少), 再 N=1 起步,
+         看到对悬崖识别有帮助再加. 不要直接用 N=3+ 强锁. -->
+    <param name="walkable_revert_frames"           value="0"/>
+
+  </node>
+
+  <!-- v2 Phase 1 Step E: SLOPE 方向 scan ray 设 inf, 让 NeuPAN 不把坡面当障碍 -->
+  <node pkg="scan_filter" type="scan_filter_node.py"
+        name="scan_filter_node" output="screen">
+    <param name="scan_in"        value="/scan"/>
+    <param name="scan_out"       value="/scan_filtered"/>
+    <param name="grid_in"        value="/traversability/passability_grid"/>
+    <param name="enable_filter"  value="true"/>
+    <param name="tf_timeout"     value="0.05"/>
+  </node>
+
+  <!-- v2 Phase 1 Step G: 融合 /map/whole + /passability_grid → /map/whole_traversable
+       给 map_planner A* 用, 让 A* 主动穿过栈桥/缓坡, 避开 RISK/BLOCK.
+       规则见 tunnel_design_v2.md §5.7, passability 超时退回 pass-through. -->
+  <node pkg="passability_fuser" type="passability_fuser_node.py"
+        name="passability_fuser" output="screen">
+    <param name="base_map_topic"      value="/map/whole"/>
+    <param name="passability_topic"   value="/traversability/passability_grid"/>
+    <param name="output_topic"        value="/map/whole_traversable"/>
+    <param name="obstacle_threshold"  value="50"/>
+    <param name="publish_rate"        value="1.0"/>
+    <param name="passability_timeout" value="3.0"/>
+    <!-- v2.1 (2026-05-19): RISK 安全 buffer (米). 解决悬崖廊道贴边掉车.
+         0.4m ≈ 4 格 @0.1m/cell, 接近 K02 半个车宽. **真机部署前应回退到 0.0**
+         避免隧道窄廊道全标 OCC 让规划失败. -->
+    <param name="risk_inflation_meters" value="0.4"/>
+    <!-- v2.1: base=OCC + p=NORMAL → FREE. 解决 sim grid_mapper /scan 把栈桥钢筋
+         累积成 OCC 但 path_detect 显式 NORMAL 的桥面被卡的问题. **真机部署前应关闭**
+         (false-positive 风险: 平台型低矮障碍顶面被误判 NORMAL). -->
+    <param name="override_normal_on_wall" value="true"/>
+  </node>
+
+</launch>
