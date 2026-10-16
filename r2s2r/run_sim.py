@@ -307,16 +307,11 @@ def on_render_step():
     # ---- 发布 POINTCLOUD ----
     if now - _last_pc_time >= _pc_interval and suite is not None:
         lidar_data = suite.get_data_by_type("lidar")
-        for name, data in lidar_data.items():
-            pc = data.get("point_cloud")
-            if pc is not None and len(pc) > 0:
-                # LiDAR 点云在 sensor local frame, 转换到世界坐标
-                if _body_prim.IsValid():
-                    T = get_robot_world_transform(_body_prim)
-                    R = T[:3, :3]
-                    t = T[:3, 3]
-                    pc_world = (R @ pc.T).T + t
-                    bridge_server.send_pointcloud(pc_world, frame_id="map", timestamp=now)
+        for data in lidar_data.values():
+            pc_world = data.get("point_cloud")
+            if pc_world is not None and len(pc_world) > 0:
+                bridge_server.send_pointcloud(
+                    pc_world, frame_id="map", timestamp=now)
         _last_pc_time = now
 
     # ---- 发布 IMAGE ----

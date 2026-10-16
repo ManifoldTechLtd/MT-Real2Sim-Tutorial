@@ -2,13 +2,12 @@
   <!-- TCP Bridge: Isaac Sim → ROS1 -->
   <arg name="tcp_host" default="localhost"/>
   <arg name="tcp_port" default="9090"/>
-  <!-- 静态 TF 偏移按机器人类型加载. 与 r2s2r/configs/config.yaml: quadruped.robot_type 保持一致 -->
-  <arg name="robot_type" default="kinematic_car"/>
+  <arg name="tf_profile" default="odin1"/>
 
   <node pkg="sim_bridge" type="bridge_node.py" name="sim_bridge" output="screen">
     <param name="tcp_host" value="$(arg tcp_host)"/>
     <param name="tcp_port" value="$(arg tcp_port)"/>
     <param name="reconnect_interval" value="2.0"/>
-    <rosparam command="load" file="$(find sim_bridge)/config/tf_$(arg robot_type).yaml"/>
+    <rosparam command="load" file="$(find sim_bridge)/config/tf_$(arg tf_profile).yaml"/>
   </node>
 </launch>

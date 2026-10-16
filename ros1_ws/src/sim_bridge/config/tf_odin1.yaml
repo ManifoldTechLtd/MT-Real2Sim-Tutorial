@@ -1,0 +1,9 @@
+# ODIN1 传感器套件静态 TF，与 r2s2r/configs/calibration/odin1/extrinsics.yaml 一致。
+
+base_height: 0.30
+sensor_base_offset_xyz: [0.30, 0.0, 0.50]
+sensor_base_rotation_xyzw: [0.0, 0.0, 0.0, 1.0]
+lidar_offset_xyz: [-0.02810, 0.02410, 0.03456]
+lidar_rotation_xyzw: [0.00826, 0.00211, 0.00474, 0.99995]
+camera_offset_xyz: [0.309953, 0.031194, 0.518085]
+imu_offset_xyz: [0.30, 0.0, 0.50]

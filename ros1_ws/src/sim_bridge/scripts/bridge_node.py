@@ -12,12 +12,12 @@ TCP 客户端 → ROS1 Topics 桥接节点
         map → odom (静态, identity)
         odom → base_link (动态, 来自 POSE 消息, 即机器人 body 位姿)
         base_link → base_footprint (静态, [0,0,-base_height])
-        base_link → odin1_base_link (静态, sensor_base_offset_xyz, 传感器基座=lidar)
-        odin1_base_link → lidar1 (静态 identity, alias)
+        base_link → odin1_base_link (静态, 传感器套件安装外参)
+        odin1_base_link → lidar1 (静态, LiDAR 套件内外参)
         base_link → camera1  (静态, camera_offset_xyz)
         base_link → imu_link (静态, imu_offset_xyz)
 
-      静态偏移按 robot_type 从 config/tf_<robot_type>.yaml 加载,
+      静态偏移按 tf_profile 从 config/tf_<profile>.yaml 加载,
       由 bridge.launch 通过 rosparam load 注入. 默认值在下方 ctor 仅作 fallback.
 """
 
@@ -69,6 +69,11 @@ class BridgeNode:
         # base_link ≡ spot body link, 足底高度参数化 (默认 0.237 = 实测 Spot 站立)
         self.base_height = rospy.get_param("~base_height", 0.237)
         self.sensor_base_offset = rospy.get_param("~sensor_base_offset_xyz", [0.0, 0.0, 0.8])
+        self.sensor_base_rotation = rospy.get_param(
+            "~sensor_base_rotation_xyzw", [0.0, 0.0, 0.0, 1.0])
+        self.lidar_offset = rospy.get_param("~lidar_offset_xyz", [0.0, 0.0, 0.0])
+        self.lidar_rotation = rospy.get_param(
+            "~lidar_rotation_xyzw", [0.0, 0.0, 0.0, 1.0])
         self.camera_offset = rospy.get_param("~camera_offset_xyz", [0.3, 0.0, 0.6])
         self.imu_offset = rospy.get_param("~imu_offset_xyz", [0.0, 0.0, 0.5])
 
@@ -101,12 +106,12 @@ class BridgeNode:
         rospy.loginfo(f"[sim_bridge] Target: {self.host}:{self.port}")
         rospy.loginfo(f"[sim_bridge] TF: {self.map_frame} → {self.odom_frame} → {self.base_frame}")
         rospy.loginfo(f"[sim_bridge] Static: {self.footprint_frame} (z=-{self.base_height}), "
-                      f"{self.sensor_base_frame}={self.sensor_base_offset} (≡ {self.lidar_frame}), "
+                      f"{self.sensor_base_frame}={self.sensor_base_offset}, "
+                      f"{self.lidar_frame}={self.lidar_offset}, "
                       f"{self.camera_frame}={self.camera_offset}, "
                       f"{self.imu_frame}={self.imu_offset}")
 
-    def _make_static_tf(self, parent, child, xyz, time):
-        """辅助: 构造一个纯平移、零旋转的 TransformStamped"""
+    def _make_static_tf(self, parent, child, xyz, time, rotation=None):
         t = TransformStamped()
         t.header.stamp = time
         t.header.frame_id = parent
@@ -114,7 +119,11 @@ class BridgeNode:
         t.transform.translation.x = float(xyz[0])
         t.transform.translation.y = float(xyz[1])
         t.transform.translation.z = float(xyz[2])
-        t.transform.rotation.w = 1.0  # identity rotation
+        q = rotation or [0.0, 0.0, 0.0, 1.0]
+        t.transform.rotation.x = float(q[0])
+        t.transform.rotation.y = float(q[1])
+        t.transform.rotation.z = float(q[2])
+        t.transform.rotation.w = float(q[3])
         return t
 
     def _publish_static_tfs(self):
@@ -128,12 +137,13 @@ class BridgeNode:
             # base_link → base_footprint (足底在地面)
             self._make_static_tf(self.base_frame, self.footprint_frame,
                                  [0, 0, -self.base_height], now),
-            # base_link → odin1_base_link (传感器基座)
+            # base_link → odin1_base_link (传感器套件安装外参)
             self._make_static_tf(self.base_frame, self.sensor_base_frame,
-                                 self.sensor_base_offset, now),
-            # odin1_base_link → lidar1 (alias, 与 lidar 物理坐标重合)
+                                 self.sensor_base_offset, now,
+                                 self.sensor_base_rotation),
+            # odin1_base_link → lidar1 (套件内 LiDAR 外参)
             self._make_static_tf(self.sensor_base_frame, self.lidar_frame,
-                                 [0, 0, 0], now),
+                                 self.lidar_offset, now, self.lidar_rotation),
             # base_link → camera1
             self._make_static_tf(self.base_frame, self.camera_frame,
                                  self.camera_offset, now),

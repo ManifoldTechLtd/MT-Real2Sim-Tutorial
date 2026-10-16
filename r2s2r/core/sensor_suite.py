@@ -259,8 +259,6 @@ class SensorSuite:
                     _log.error("  -> 深度 annotator 注册失败: %s", e, exc_info=True)
 
             if sensor_type == "lidar":
-                # NOTE: transformPoints 已被官方弃用 (DEPRECATED), 属性存在但无实际效果.
-                # 点云始终返回 sensor local frame.
                 sensor.attach_annotator(
                     "IsaacCreateRTXLidarScanBuffer",
                     outputTimestamp=True,
@@ -557,10 +555,12 @@ class SensorSuite:
             print(f"    LiDAR '{name}': config={config_name}, "
                   f"pos={cfg['translation'].tolist()}")
 
-        # attr_overrides
-        attr_overrides = intrinsics.get("attr_overrides")
-        if attr_overrides:
-            self._apply_attr_overrides(prim_path, attr_overrides)
+        attr_overrides = dict(intrinsics.get("attr_overrides") or {})
+        attr_overrides.update({
+            "outputFrameOfReference": "WORLD",
+            "outputMotionCompensationState": "COMPENSATED",
+        })
+        self._apply_attr_overrides(prim_path, attr_overrides)
 
         self._dump_lidar_prim_attrs(prim_path)
 
@@ -756,12 +756,16 @@ class SensorSuite:
             intensity = scan_buf.get("intensity")
             if intensity is not None and hasattr(intensity, '__len__') and len(intensity) > 0:
                 data["intensities"] = np.asarray(intensity, dtype=np.float32)
-            fire_times = scan_buf.get("timestamp")
-            if fire_times is not None and hasattr(fire_times, '__len__') and len(fire_times) > 0:
-                data["fire_times_ns"] = np.asarray(fire_times, dtype=np.float64)
+            timestamps = scan_buf.get("timestamp")
+            if timestamps is not None and hasattr(timestamps, '__len__') and len(timestamps) > 0:
+                data["timestamps_ns"] = np.asarray(timestamps, dtype=np.uint64)
             info = scan_buf.get("info")
             if info is not None:
                 data["scan_info"] = info
+                transform = info.get("transform")
+                if transform is not None:
+                    data["lidar_to_world"] = np.asarray(
+                        transform, dtype=np.float64).reshape(4, 4).T
         return data
 
     @staticmethod
