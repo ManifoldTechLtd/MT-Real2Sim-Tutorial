@@ -2,7 +2,7 @@
 # Isaac Real2Sim2Real — Go2 仿真配置
 # ========================================
 # 最终部署目标: Unitree Go2 + ODIN1 LiDAR
-# NOTE: Go2 RL policy 当前有已知稳定性问题, 待修复后切换
+# Go2 MoE-CTS + velocity PI; continuous high stairs still require adaptation.
 
 simulation:
   headless: false
@@ -43,7 +43,7 @@ lighting:
 
 sensor_suite:
   enabled: true
-  calibration_dir: "calibration/pinhole"
+  calibration_dir: "calibration/odin1_go2"
 
 # TCP 桥接配置
 bridge:

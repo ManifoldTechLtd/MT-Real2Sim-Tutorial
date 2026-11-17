@@ -1,0 +1,13 @@
+{
+  "source": "https://github.com/wertyuilife2/go2_rl_robotlab",
+  "commit": "c85e51c70df0f25e9f865654be978a2c2d53cccd",
+  "policy_sha256": "c602e749ac292921e3d6f5b2ab1749c4e4eaa6dbe51f751cce5b669b102d10a2",
+  "observation_size": 45,
+  "internal_history": 10,
+  "policy_period": 0.02,
+  "action_scale": 0.25,
+  "kp": 20.0,
+  "kd": 0.5,
+  "reference_mujoco_physics_dt": 0.002,
+  "isaac_physics_dt": 0.005
+}

@@ -25,8 +25,10 @@ _ROBOT_REGISTRY = {
         "body_link": "body",
     },
     "go2": {
-        "class": "r2s2r.core.go2_policy.Go2FlatTerrainPolicy",
+        # Go2-specific MoE-CTS with velocity PI; 50 Hz inference.
+        "class": "r2s2r.core.go2_moe_policy.Go2MoeCTSPolicy",
         "body_link": "base",
+        "physics_dt": 0.005,  # Isaac Lab sim.dt; 50 Hz policy, explicit PD at 200 Hz
     },
     "kinematic_car": {
         # 运动学差速车: 旁路物理引擎, 适合验证导航算法 (路径规划/控制)
@@ -34,6 +36,10 @@ _ROBOT_REGISTRY = {
         "body_link": "base_link",
     },
 }
+
+
+def physics_dt_for(robot_type: str) -> float:
+    return _ROBOT_REGISTRY.get(robot_type, {}).get("physics_dt", 1.0 / 500.0)
 
 
 def create_quadruped(cfg: dict):
@@ -119,7 +125,9 @@ def build_quadruped_scene(world, config: dict):
     robot, body_prim_path = create_quadruped(quad_cfg)
 
     # 传感器套件 (可选)
-    calibration_dir = (config.get("sensor_suite") or {}).get("calibration_dir")
+    ss_cfg = config.get("sensor_suite") or {}
+    calibration_dir = (ss_cfg.get("calibration_dir_by_robot") or {}).get(
+        quad_cfg.get("robot_type", "spot"), ss_cfg.get("calibration_dir"))
     suite = None
     if calibration_dir:
         calibration_dir = os.path.expanduser(calibration_dir)

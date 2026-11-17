@@ -5,6 +5,7 @@ TCP 客户端 → ROS1 Topics 桥接节点
 
 订阅: /cmd_vel (geometry_msgs/Twist) → TCP CMD_VEL
 发布: /state_estimation (nav_msgs/Odometry)
+      /clock (rosgraph_msgs/Clock, when /use_sim_time is true)
       /registered_scan (sensor_msgs/PointCloud2)
       /camera/image/compressed (sensor_msgs/CompressedImage)
       /imu/data (sensor_msgs/Imu)
@@ -27,12 +28,14 @@ import socket
 import time
 import struct
 import threading
+from collections import deque
 import numpy as np
 
 import rospy
 from geometry_msgs.msg import Twist, TransformStamped
 from std_msgs.msg import Empty
 from nav_msgs.msg import Odometry
+from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import PointCloud2, PointField, CompressedImage, Imu
 import sensor_msgs.point_cloud2 as pc2
 import tf
@@ -42,7 +45,7 @@ import tf2_ros
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 from protocol import (
     encode_cmd_vel, encode_reset, decode_message,
-    MSG_POSE, MSG_POINTCLOUD, MSG_IMAGE, MSG_IMU, HEADER_SIZE,
+    MSG_POSE, MSG_POINTCLOUD, MSG_IMAGE, MSG_IMU, MSG_CLOCK, HEADER_SIZE,
 )
 
 
@@ -54,6 +57,8 @@ class BridgeNode:
         self.host = rospy.get_param("~tcp_host", "localhost")
         self.port = rospy.get_param("~tcp_port", 9090)
         self.reconnect_interval = rospy.get_param("~reconnect_interval", 2.0)
+        self.use_sim_time = rospy.get_param("/use_sim_time", False)
+        self._sim_time = None
 
         # Frame 命名
         self.map_frame = rospy.get_param("~map_frame", "map")
@@ -75,11 +80,16 @@ class BridgeNode:
         self.lidar_rotation = rospy.get_param(
             "~lidar_rotation_xyzw", [0.0, 0.0, 0.0, 1.0])
         self.camera_offset = rospy.get_param("~camera_offset_xyz", [0.3, 0.0, 0.6])
+        self.camera_rotation = rospy.get_param("~camera_rotation_xyzw", [0.0, 0.0, 0.0, 1.0])
         self.imu_offset = rospy.get_param("~imu_offset_xyz", [0.0, 0.0, 0.5])
+        self.imu_rotation = rospy.get_param("~imu_rotation_xyzw", [0.0, 0.0, 0.0, 1.0])
 
         # Publishers
+        self.clock_pub = rospy.Publisher("/clock", Clock, queue_size=10) if self.use_sim_time else None
         self.odom_pub = rospy.Publisher("/state_estimation", Odometry, queue_size=10)
         self.pc_pub = rospy.Publisher("/registered_scan", PointCloud2, queue_size=5)
+        self._last_cloud_stamp = 0.0
+        self._odom_tf_stamps = deque(maxlen=256)
         self.img_pub = rospy.Publisher("/camera/image/compressed", CompressedImage, queue_size=5)
         self.imu_pub = rospy.Publisher("/imu/data", Imu, queue_size=50)
         self.tf_broadcaster = tf.TransformBroadcaster()
@@ -146,10 +156,10 @@ class BridgeNode:
                                  self.lidar_offset, now, self.lidar_rotation),
             # base_link → camera1
             self._make_static_tf(self.base_frame, self.camera_frame,
-                                 self.camera_offset, now),
+                                 self.camera_offset, now, self.camera_rotation),
             # base_link → imu_link
             self._make_static_tf(self.base_frame, self.imu_frame,
-                                 self.imu_offset, now),
+                                 self.imu_offset, now, self.imu_rotation),
         ]
         self.static_tf_broadcaster.sendTransform(tfs)
 
@@ -195,13 +205,11 @@ class BridgeNode:
 
     def run(self):
         """主循环"""
-        rate = rospy.Rate(200)  # 200Hz 轮询
-
         while not rospy.is_shutdown():
             if not self.connected:
                 if not self.connect():
                     rospy.logwarn_throttle(5, "[sim_bridge] Waiting for Isaac Sim TCP server...")
-                    rospy.sleep(self.reconnect_interval)
+                    time.sleep(self.reconnect_interval)
                     continue
 
             # 接收数据
@@ -267,10 +275,24 @@ class BridgeNode:
                         pass
                     self.disconnect()
 
-            rate.sleep()
+            # Receiving /clock must continue when simulation time is paused or zero.
+            time.sleep(0.005)
 
     def handle_message(self, msg_type, payload):
         """处理收到的 TCP 消息"""
+        if msg_type == MSG_CLOCK:
+            stamp = float(payload['ts'])
+            if self.clock_pub is not None and np.isfinite(stamp) and stamp >= 0:
+                if self._sim_time is not None and stamp < self._sim_time:
+                    self._last_cloud_stamp = 0.0
+                self._sim_time = stamp
+                self.clock_pub.publish(Clock(clock=rospy.Time.from_sec(stamp)))
+            return
+        if msg_type not in (MSG_POSE, MSG_POINTCLOUD, MSG_IMAGE, MSG_IMU):
+            return
+        if self.use_sim_time and (self._sim_time is None or payload['ts'] > self._sim_time + 1e-6):
+            rospy.logwarn_throttle(5.0, 'Waiting for matching simulation clock; restart Isaac and bridge together')
+            return
         if msg_type == MSG_POSE:
             self.publish_odometry(payload)
         elif msg_type == MSG_POINTCLOUD:
@@ -312,6 +334,7 @@ class BridgeNode:
             self.base_frame,
             self.odom_frame,
         )
+        self._odom_tf_stamps.append(odom.header.stamp)
 
     def publish_pointcloud(self, data):
         """发布 PointCloud2"""
@@ -319,9 +342,27 @@ class BridgeNode:
         if xyz is None or len(xyz) == 0:
             return
 
+        stamp = float(data['ts'])
+        if not np.isfinite(stamp) or stamp <= self._last_cloud_stamp:
+            return
+        now = self._sim_time if self.use_sim_time else rospy.Time.now().to_sec()
+        if not 0.0 <= now-stamp <= 1.0:
+            return
         header = rospy.Header()
-        header.stamp = rospy.Time.from_sec(data["ts"])
+        header.stamp = rospy.Time.from_sec(stamp)
         header.frame_id = data.get("frame_id", "map")
+        if 'body_pose' in data:
+            pose = np.asarray(data['body_pose'], dtype=float)
+            if (header.frame_id != self.map_frame or pose.shape != (7,) or
+                    not np.all(np.isfinite(pose)) or np.linalg.norm(pose[3:]) < 1e-9):
+                rospy.logwarn_throttle(2.0, 'Rejected lidar observation with invalid measurement pose')
+                return
+            # Insert the historical measured pose into TF without replacing the
+            # current odometry message. map -> odom is identity in this bridge.
+            if header.stamp not in self._odom_tf_stamps:
+                self.tf_broadcaster.sendTransform(tuple(pose[:3]), tuple(pose[3:]/np.linalg.norm(pose[3:])),
+                    header.stamp, self.base_frame, self.odom_frame)
+        self._last_cloud_stamp = stamp
 
         fields = [
             PointField("x", 0, PointField.FLOAT32, 1),

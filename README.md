@@ -235,3 +235,9 @@ source /catkin_ws/devel/setup.bash
 ## 许可
 
 基于 tunnel-inspection-v2 和 MT-Real2Sim-Tutorial 融合。
+
+
+## Simulation updates
+
+Go2 MoE-CTS + PI, ODIN1 calibration, synchronized lidar/ROS simulation time,
+and diagnostics are described in [docs/simulation_updates.md](docs/simulation_updates.md).

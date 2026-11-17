@@ -295,9 +295,13 @@ if [ "$ROSCORE_WAIT" -ge 30 ]; then
 fi
 ok "roscore 就绪 (${ROSCORE_WAIT}s)"
 
-info "启动 sim_bridge (日志: $LOG_DIR/bridge.log)..."
+TF_PROFILE=odin1
+if [ "$ROBOT_TYPE" = "go2" ]; then
+    TF_PROFILE=odin1_go2
+fi
+info "启动 sim_bridge (tf_profile=$TF_PROFILE, 日志: $LOG_DIR/bridge.log)..."
 docker exec -d "$ROS_CONTAINER" bash -c \
-    "source /catkin_ws/devel/setup.bash; roslaunch sim_bridge bridge.launch --wait >/tmp/bridge.log 2>&1"
+    "source /catkin_ws/devel/setup.bash; roslaunch sim_bridge bridge.launch tf_profile:=$TF_PROFILE --wait >/tmp/bridge.log 2>&1"
 sleep 3
 docker cp "$ROS_CONTAINER":/tmp/roscore.log "$LOG_DIR/roscore.log" 2>/dev/null || true
 docker cp "$ROS_CONTAINER":/tmp/bridge.log  "$LOG_DIR/bridge.log"  2>/dev/null || true

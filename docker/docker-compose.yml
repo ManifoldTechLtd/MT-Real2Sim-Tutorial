@@ -19,6 +19,10 @@ services:
     stdin_open: true
     tty: true
 
+    # Allow opt-in hang diagnostics to attach to the simulator.
+    cap_add:
+      - SYS_PTRACE
+
     environment:
       - ACCEPT_EULA=Y
       - PRIVACY_CONSENT=Y
@@ -30,6 +34,11 @@ services:
       # 环境变量覆盖（通过start.sh传入）
       - ROBOT_TYPE=${ROBOT_TYPE:-kinematic_car}
       - SCENE_PATH=${SCENE_PATH:-/dataset/tunnel1.usdz}
+      - PHYSX_GPU_DYNAMICS=${PHYSX_GPU_DYNAMICS:-}
+      - PHYSX_DEVICE=${PHYSX_DEVICE:-}
+      - COLLISION_APPROX=${COLLISION_APPROX:-meshSimplification}
+      - CONTACT_OFFSET=${CONTACT_OFFSET:-}
+      - GPU_MAX_PARTITIONS=${GPU_MAX_PARTITIONS:-}
 
     working_dir: /workspace
 

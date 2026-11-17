@@ -15,11 +15,13 @@ sensor_suite.py
 
 import os
 import logging
+import tempfile
 import numpy as np
 import yaml
+from r2s2r.core.observation import rigid_transform, decode_lidar_frame
 
 # 文件日志
-_log_path = os.path.join(os.path.dirname(__file__), "..", "..", "sensor_suite_debug.log")
+_log_path = os.path.join(tempfile.gettempdir(), "sensor_suite_debug.log")
 _log_path = os.path.abspath(_log_path)
 _log = logging.getLogger("sensor_suite")
 _log.setLevel(logging.DEBUG)
@@ -56,6 +58,36 @@ def _set_or_create_attr(prim, attr_name, value, type_name):
     attr.Set(value)
 
 
+def create_lidar_writer(render_product):
+    """Collect cloud, scan pose and simulation time in one render-product batch."""
+    import omni.replicator.core as rep
+
+    class LidarWriter(rep.Writer):
+        def __init__(self):
+            self.annotators = [
+                rep.AnnotatorRegistry.get_annotator('IsaacCreateRTXLidarScanBuffer',
+                    init_params={'enablePerFrameOutput': True,
+                                 'outputTimestamp': True, 'outputDistance': True}),
+                rep.AnnotatorRegistry.get_annotator('IsaacReadSimulationTime',
+                    init_params={'resetOnStop': True}),
+            ]
+            self.latest = {}
+            self.last_scan_ns = -1
+
+        def write(self, data):
+            try:
+                observation = decode_lidar_frame(data)
+                if observation and observation['scan_stamp_ns'] > self.last_scan_ns:
+                    self.last_scan_ns = observation['scan_stamp_ns']
+                    self.latest = observation
+            except (ValueError, KeyError, TypeError) as error:
+                self.latest = {'error': str(error)}
+
+    writer = LidarWriter()
+    writer.attach([render_product])
+    return writer
+
+
 class SensorSuite:
     """
     传感器套件: 从 calibration 目录读取外参 + 内参文件,
@@ -86,6 +118,7 @@ class SensorSuite:
 
         # 传感器实例字典
         self._sensors = {}
+        self._lidar_writers = {}
         # 传感器配置字典 (解析后)
         self._sensor_configs = {}
 
@@ -202,6 +235,9 @@ class SensorSuite:
             self._build_rimu_xform()
 
         for name, cfg in self._sensor_configs.items():
+            if not cfg["raw_cfg"].get("enabled", True):
+                print(f"  [SensorSuite] 已禁用: {name}")
+                continue
             sensor_type = cfg["type"]
             _log.info("创建 sensor: name=%s, type=%s, translation=%s, rotation=%s",
                       name, sensor_type, cfg["translation"], cfg["rotation"])
@@ -259,10 +295,9 @@ class SensorSuite:
                     _log.error("  -> 深度 annotator 注册失败: %s", e, exc_info=True)
 
             if sensor_type == "lidar":
-                sensor.attach_annotator(
-                    "IsaacCreateRTXLidarScanBuffer",
-                    outputTimestamp=True,
-                )
+                if name in self._lidar_writers:
+                    self._lidar_writers[name].detach()
+                self._lidar_writers[name] = create_lidar_writer(sensor.get_render_product_path())
 
     def get_data(self) -> dict:
         """
@@ -281,12 +316,20 @@ class SensorSuite:
                 if sensor_type == "camera":
                     result[name] = self._get_camera_data(sensor)
                 elif sensor_type == "lidar":
-                    result[name] = self._get_lidar_data(sensor)
+                    result[name] = self._lidar_writers[name].latest
                 elif sensor_type == "imu":
                     result[name] = self._get_imu_data(sensor)
             except Exception as e:
                 result[name] = {"error": str(e)}
         return result
+
+    def sensor_to_body(self, name):
+        """Return the composed sensor extrinsics used by the USD hierarchy."""
+        config = self._sensor_configs[name]
+        transform = rigid_transform(config['translation'], config['rotation'])
+        if self._use_rimu:
+            transform = rigid_transform(self._mount_translation, self._mount_rotation) @ transform
+        return transform
 
     def get_data_by_type(self, sensor_type: str) -> dict:
         """
@@ -306,7 +349,7 @@ class SensorSuite:
                 if sensor_type == "camera":
                     result[name] = self._get_camera_data(sensor)
                 elif sensor_type == "lidar":
-                    result[name] = self._get_lidar_data(sensor)
+                    result[name] = self._lidar_writers[name].latest
                 elif sensor_type == "imu":
                     result[name] = self._get_imu_data(sensor)
             except Exception as e:
@@ -665,7 +708,11 @@ class SensorSuite:
                 attr.Set(value)
                 new_val = attr.Get()
                 print(f"    [attr_overrides] {attr_name}: {old_val} → {new_val}")
+                if key in ('outputFrameOfReference', 'outputMotionCompensationState') and new_val != value:
+                    raise RuntimeError(f"Required lidar attribute {attr_name} did not accept {value}")
             else:
+                if key in ('outputFrameOfReference', 'outputMotionCompensationState'):
+                    raise RuntimeError(f"Required lidar attribute {attr_name} is missing")
                 print(f"    [attr_overrides] {attr_name} 不存在, 跳过")
 
     @staticmethod
@@ -737,35 +784,6 @@ class SensorSuite:
         if depth_raw is not None:
             data["depth"] = np.squeeze(depth_raw).astype(np.float32)
 
-        return data
-
-    @staticmethod
-    def _get_lidar_data(lidar) -> dict:
-        """获取 LiDAR 的点云数据"""
-        data = {}
-        cf = lidar.get_current_frame()
-        scan_buf = cf.get("IsaacCreateRTXLidarScanBuffer")
-        if scan_buf is not None:
-            xyz = scan_buf.get("data")
-            if xyz is not None and hasattr(xyz, '__len__') and len(xyz) > 0:
-                pc = np.asarray(xyz, dtype=np.float32)
-                if pc.ndim == 2 and pc.shape[1] >= 3:
-                    data["point_cloud"] = pc[:, :3]
-                elif pc.ndim == 1 and len(pc) >= 3:
-                    data["point_cloud"] = pc.reshape(-1, 3)
-            intensity = scan_buf.get("intensity")
-            if intensity is not None and hasattr(intensity, '__len__') and len(intensity) > 0:
-                data["intensities"] = np.asarray(intensity, dtype=np.float32)
-            timestamps = scan_buf.get("timestamp")
-            if timestamps is not None and hasattr(timestamps, '__len__') and len(timestamps) > 0:
-                data["timestamps_ns"] = np.asarray(timestamps, dtype=np.uint64)
-            info = scan_buf.get("info")
-            if info is not None:
-                data["scan_info"] = info
-                transform = info.get("transform")
-                if transform is not None:
-                    data["lidar_to_world"] = np.asarray(
-                        transform, dtype=np.float64).reshape(4, 4).T
         return data
 
     @staticmethod

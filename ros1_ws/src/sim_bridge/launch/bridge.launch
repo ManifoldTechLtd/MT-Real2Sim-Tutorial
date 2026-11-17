@@ -3,6 +3,8 @@
   <arg name="tcp_host" default="localhost"/>
   <arg name="tcp_port" default="9090"/>
   <arg name="tf_profile" default="odin1"/>
+  <!-- Set before starting consumers; Isaac and the bridge must use the same clock. -->
+  <param name="/use_sim_time" value="true"/>
 
   <node pkg="sim_bridge" type="bridge_node.py" name="sim_bridge" output="screen">
     <param name="tcp_host" value="$(arg tcp_host)"/>

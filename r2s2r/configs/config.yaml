@@ -14,6 +14,7 @@ simulation:
   height: 720
   # 渲染器: "RayTracedLighting"(默认/推荐) | "PathTracing"(慢, 仅离线截图用)
   renderer: "RayTracedLighting"
+  render_hz: 25  # Rendering is independent of the Go2 50 Hz policy.
   render_opt:
     enabled: true
     reflections: false
@@ -80,7 +81,9 @@ lighting:
 # 从 calibration/ 目录读取内外参, 创建 Camera + LiDAR + IMU
 sensor_suite:
   enabled: true
-  calibration_dir: "calibration/kinematic_car"   # 履带车专用 (mount.z=0, lidar 离地 0.5m)
+  calibration_dir: "calibration/odin1"
+  calibration_dir_by_robot:
+    go2: "calibration/odin1_go2"
   # calibration_dir: "calibration/pinhole"  # Spot/Go2 套件 (mount.z=0.5)
   # calibration_dir: "calibration/odin1"    # ODIN1 鱼眼 + LiDAR 套件
 

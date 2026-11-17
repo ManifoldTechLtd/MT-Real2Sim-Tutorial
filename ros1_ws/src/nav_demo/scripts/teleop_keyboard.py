@@ -63,6 +63,20 @@ def get_key_nonblocking(timeout=0.1):
     return ch
 
 
+def other_velocity_publisher():
+    """Yield command ownership while an automatic controller publishes."""
+    try:
+        code, _, state = rospy.get_master().getSystemState()
+        if code != 1:
+            return True
+        topic = rospy.resolve_name('/cmd_vel')
+        return any(name != rospy.get_name() for channel, names in state[0]
+                   if channel == topic for name in names)
+    except Exception as exc:
+        rospy.logwarn_throttle(5, 'Cannot check velocity ownership: %s', exc)
+        return True
+
+
 def main():
     rospy.init_node("teleop_keyboard")
 
@@ -87,6 +101,12 @@ def main():
             if key == '\x03':  # Ctrl+C
                 break
 
+            if other_velocity_publisher():
+                cur_vx = cur_vy = cur_wz = 0.0
+                rospy.logwarn_throttle(5, 'Automatic velocity publisher active; keyboard control paused')
+                rate.sleep()
+                continue
+
             if key:
                 binding = BINDINGS.get(key.lower())
                 if binding is not None:
@@ -110,7 +130,8 @@ def main():
         pass
     finally:
         # 发送停止指令
-        pub.publish(Twist())
+        if not other_velocity_publisher():
+            pub.publish(Twist())
         print("\nStopped.")
 
 

@@ -2,8 +2,11 @@
 # LiDAR 内参配置 - odin1 LiDAR
 # ========================================
 #
-# 固态 RTX LiDAR 配置
-# ZVISION_ML30S: 153°×73° FOV, 51K pts/frame, 无旋转畸变
-
+# ODIN1 固态 RTX LiDAR:
+#   FOV 120°×90°, 角分辨率 0.5°×0.5°, 最小测距 0.2 m, rangeAccuracyM=0.03 m.
+#   实机 bag 验证: 固定重复角度栅格, 行距 0.47–0.50° (中心密、边缘疏), 非随机图案.
+#   fireTimeNs 全 0, 避免 RTX lidar 跨物理步累积发射任务导致周期性卡顿.
 model: rtx_lidar
-config_name: "lidar_configs/json/MLXS_nofire_quarter.json"
+config_name: "lidar_configs/json/odin1_120x90_0p5.json"
+# config_name: "lidar_configs/json/scatter_120x90.json"           # 27000 点随机散布
+# config_name: "lidar_configs/json/MLXS_nofire_quarter.json"      # 真机图案, 近场盲区

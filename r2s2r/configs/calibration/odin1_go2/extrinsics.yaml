@@ -1,0 +1,35 @@
+# ========================================
+# odin1 传感器套件外参配置 — Go2 头顶安装 (分层格式)
+# ========================================
+#
+# 约定与 calibration/odin1/extrinsics.yaml 相同:
+#   translation: [x, y, z] 单位: 米
+#   rotation: [w, x, y, z] 四元数 (Hamilton, scalar-first)
+#   ref_imu.mount_extrinsics 为 T_body_rimu, sensors 中各 extrinsics 为 T_rimu_sensor.
+# 套件内 camera1 / lidar1 标定与 odin1 相同, 只有安装变换不同.
+
+ref_imu:
+  name: imu_center
+  frequency: 200
+  # T_body_rimu = T_body_lidar * inverse(T_rimu_lidar).
+  # The lidar origin is [0.285, 0, 0.12] in Go2 base, facing +X: head center x=0.285,
+  # 4 cm above the visual head top (z≈0.080) so the 120°×90° FOV clears the head mesh.
+  mount_extrinsics:
+    translation: [0.313012319746, -0.024932621673, 0.085963432621]
+    rotation: [0.999952424988, -0.008260020031, -0.002110005117, -0.004740011495]
+
+sensors:
+  camera1:
+    enabled: false
+    type: camera
+    intrinsics_file: "../odin1/intrinsics_camera1.yaml"
+    extrinsics:                              # T_rimu_camera1
+      translation: [0.009953, 0.031194, 0.018085]
+      rotation: [0.99998, 0.00011, 0.00469, -0.00373]
+
+  lidar1:
+    type: lidar
+    intrinsics_file: "../odin1/intrinsics_lidar1.yaml"
+    extrinsics:                              # T_rimu_lidar1
+      translation: [-0.02810, 0.02410, 0.03456]
+      rotation: [0.99995, 0.00826, 0.00211, 0.00474]

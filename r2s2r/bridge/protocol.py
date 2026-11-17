@@ -30,6 +30,7 @@ MSG_POINTCLOUD = 0x02  # Isaac → ROS1: LiDAR 点云
 MSG_CMD_VEL = 0x03     # ROS1 → Isaac: 速度指令
 MSG_IMAGE = 0x04       # Isaac → ROS1: Camera 图像 (JPEG 压缩)
 MSG_IMU = 0x05         # Isaac → ROS1: IMU 数据
+MSG_CLOCK = 0x06       # Isaac → ROS1: simulation time in seconds
 MSG_RESET = 0x30       # ROS1 → Isaac: 复位请求 (to_start 或 原地恢复)
 
 MSG_TYPE_NAMES = {
@@ -38,6 +39,7 @@ MSG_TYPE_NAMES = {
     MSG_CMD_VEL: "CMD_VEL",
     MSG_IMAGE: "IMAGE",
     MSG_IMU: "IMU",
+    MSG_CLOCK: "CLOCK",
     MSG_RESET: "RESET",
 }
 
@@ -51,6 +53,11 @@ def encode_message(msg_type: int, payload: dict) -> bytes:
     payload_bytes = msgpack.packb(payload, use_bin_type=True)
     header = struct.pack(HEADER_FMT, MAGIC, msg_type, len(payload_bytes))
     return header + payload_bytes
+
+
+def encode_clock(timestamp: float) -> bytes:
+    """Encode the simulation clock independently of sensor publication rates."""
+    return encode_message(MSG_CLOCK, {"ts": float(timestamp)})
 
 
 def encode_pose(x, y, z, qx, qy, qz, qw,
@@ -71,7 +78,7 @@ def encode_pose(x, y, z, qx, qy, qz, qw,
 
 
 def encode_pointcloud(xyz: np.ndarray, frame_id: str = "sensor",
-                      timestamp=None) -> bytes:
+                      timestamp=None, body_pose=None) -> bytes:
     """编码 POINTCLOUD 消息
     Args:
         xyz: ndarray (N, 3), float32 点云
@@ -87,6 +94,9 @@ def encode_pointcloud(xyz: np.ndarray, frame_id: str = "sensor",
         "n_points": int(xyz_f32.shape[0]),
         "xyz": xyz_f32.tobytes(),
     }
+    if body_pose is not None:
+        # Measured body pose in map, xyz + xyzw, synchronized with this scan.
+        payload['body_pose'] = [float(v) for v in body_pose]
     return encode_message(MSG_POINTCLOUD, payload)
 
 

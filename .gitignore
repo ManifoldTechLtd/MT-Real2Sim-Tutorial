@@ -39,3 +39,6 @@ dataset/
 # Cache
 .cache/
 *.lut
+
+# Local simulator diagnostic captures
+hang_logs/

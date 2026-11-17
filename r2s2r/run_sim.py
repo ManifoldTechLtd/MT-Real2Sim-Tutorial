@@ -44,8 +44,10 @@ import numpy as np
 from pxr import Usd, UsdGeom
 
 from r2s2r.core.scene_builder import load_config
-from r2s2r.core.robot_factory import build_quadruped_scene
+from r2s2r.core.robot_factory import build_quadruped_scene, physics_dt_for
 from r2s2r.bridge.tcp_server import TcpBridgeServer
+from r2s2r.core.observation import filter_body_returns, fresh_scan
+from r2s2r.core.log_rate import log_throttled
 
 # ---- 加载配置 ----
 config = load_config(config_path)
@@ -66,17 +68,45 @@ if scene_path_env:
     config['scene']['environment']['usdz_path'] = scene_path_env
     print(f"[config] SCENE_PATH overridden by env: {scene_path_env}")
 
+collision_approx_env = os.getenv('COLLISION_APPROX')
+if collision_approx_env:
+    config.setdefault('scene', {}).setdefault('physics', {})['collision_approximation'] = collision_approx_env
+    print(f"[config] COLLISION_APPROX overridden by env: {collision_approx_env}")
+
+contact_offset_env = (os.getenv('CONTACT_OFFSET') or '').strip()
+if contact_offset_env:
+    config.setdefault('scene', {}).setdefault('physics', {})['contact_offset'] = float(contact_offset_env)
+    print(f"[config] CONTACT_OFFSET overridden by env: {contact_offset_env}")
+
 # ---- 创建 World ----
 from isaacsim.core.api import World
 
-physics_dt = 1.0 / 500.0  # 四足 RL 策略标准频率
-rendering_dt = 1.0 / 50.0  # 渲染 50Hz
+physics_dt = physics_dt_for(config["quadruped"].get("robot_type", ""))
+render_hz = float(config.get("simulation", {}).get("render_hz", 50.0))
+rendering_dt = 1.0 / render_hz
+print(f"[run_sim] physics_dt={physics_dt:.4f}, rendering_dt={rendering_dt:.4f} ({render_hz:g}Hz)")
+
+sim_params = {}
+gpu_parts_env = (os.getenv('GPU_MAX_PARTITIONS') or '').strip()
+if gpu_parts_env:
+    sim_params['gpu_max_num_partitions'] = int(gpu_parts_env)
+    print(f"[config] GPU_MAX_PARTITIONS={gpu_parts_env}")
 
 world = World(
     stage_units_in_meters=1.0,
     physics_dt=physics_dt,
     rendering_dt=rendering_dt,
+    device=os.getenv('PHYSX_DEVICE') or None,
+    sim_params=sim_params or None,
 )
+if os.getenv('PHYSX_DEVICE'):
+    print(f"[config] PHYSX_DEVICE={os.getenv('PHYSX_DEVICE')}")
+
+gpu_dyn_env = (os.getenv('PHYSX_GPU_DYNAMICS') or '').strip()
+if gpu_dyn_env:
+    enable = gpu_dyn_env.lower() not in ('0', 'false', 'off', 'no')
+    world.get_physics_context().enable_gpu_dynamics(flag=enable)
+    print(f"[config] PHYSX_GPU_DYNAMICS={gpu_dyn_env} -> enable_gpu_dynamics({enable})")
 
 # ---- 搭建场景 ----
 robot, suite, body_prim_path = build_quadruped_scene(world, config)
@@ -141,6 +171,24 @@ def mat3_to_quat(R: np.ndarray) -> tuple:
     return qx, qy, qz, qw
 
 
+def pose_twist(previous, mat, stamp):
+    """Differentiate published poses in simulation time; return body-frame twist."""
+    linear, angular = np.zeros(3), np.zeros(3)
+    if previous is None or stamp <= previous[1]:
+        return linear, angular
+    old, old_stamp = previous
+    dt = stamp - old_stamp
+    rotation = mat[:3, :3]
+    linear = rotation.T @ (mat[:3, 3] - old[:3, 3]) / dt
+    q = np.array(mat3_to_quat(rotation @ old[:3, :3].T))
+    if q[3] < 0.0:
+        q = -q
+    sine = np.linalg.norm(q[:3])
+    if sine > 1e-12:
+        angular = rotation.T @ q[:3] * (2.0 * math.atan2(sine, q[3]) / (sine * dt))
+    return linear, angular
+
+
 # ---- World 回调 ----
 import omni.usd
 _stage = omni.usd.get_context().get_stage()
@@ -176,9 +224,21 @@ _img_interval = 1.0 / bridge_cfg.get("image_rate", 10)
 _imu_interval = 1.0 / bridge_cfg.get("imu_rate", 50)
 _img_quality = bridge_cfg.get("image_quality", 80)
 _last_pose_time = 0.0
+_previous_pose_sample = None
 _last_pc_time = 0.0
 _last_img_time = 0.0
 _last_imu_time = 0.0
+_last_scan_ns = {}
+_observation_epoch = world.current_time
+_last_scan_warning = 0.0
+
+# Filter the configured body box using the measured scan pose.
+_robot_type = config["quadruped"].get("robot_type", "")
+_sf_cfg = config.get("kinematic_car", {}).get("lidar_self_filter", {})
+_self_filter_enabled = _robot_type == "kinematic_car" and bool(_sf_cfg.get("enable", False))
+_self_filter_margin = float(_sf_cfg.get("margin", 0.01))
+if not math.isfinite(_self_filter_margin) or _self_filter_margin < 0:
+    raise ValueError("invalid lidar self-filter margin")
 
 
 def reset_robot(to_start: bool = False):
@@ -191,7 +251,9 @@ def reset_robot(to_start: bool = False):
             True  (P键/回起点):   强制回到 config.yaml `quadruped.position` 起点, yaw=0,
                                  其余清零. 用于反复测试回原点.
     """
-    global _need_reinit
+    global _need_reinit, _previous_pose_sample, _observation_epoch
+    _previous_pose_sample = None
+    _observation_epoch = world.current_time
     try:
         pos, quat = robot.robot.get_world_pose()
         if pos is None or quat is None:
@@ -251,7 +313,7 @@ def reset_robot(to_start: bool = False):
 
 
 def on_physics_step(step_size):
-    """物理回调 (500Hz): RL 策略前向推理"""
+    """物理回调 (每个物理步): RL 策略前向推理"""
     global _cmd, _need_reinit
     if _need_reinit:
         _need_reinit = False
@@ -261,10 +323,12 @@ def on_physics_step(step_size):
 
 def on_render_step():
     """渲染回调 (~50Hz): TCP 桥接发布 + 指令接收"""
-    global _cmd, _frame_count, _last_pose_time, _last_pc_time, _last_img_time, _last_imu_time, _ever_received_ros_cmd
+    global _cmd, _frame_count, _last_pose_time, _last_pc_time, _last_img_time, _last_imu_time, _ever_received_ros_cmd, _previous_pose_sample
+    global _last_scan_warning
 
     _frame_count += 1
-    now = time.time()
+    now = world.current_time
+    bridge_server.send_clock(now)
 
     # ---- 检查 RESET 请求 (来自 ROS1) ----
     reset_req = bridge_server.get_reset_requested()
@@ -280,10 +344,11 @@ def on_render_step():
         _cmd[1] = ros_cmd[1]  # vy
         _cmd[2] = ros_cmd[2]  # wz
         if ros_cmd[0] != 0 or ros_cmd[1] != 0 or ros_cmd[2] != 0:
-            print(f"[run_sim] ROS cmd → _cmd: vx={ros_cmd[0]:.2f} vy={ros_cmd[1]:.2f} wz={ros_cmd[2]:.2f}")
+            log_throttled("ros_cmd",
+                          f"[run_sim] ROS cmd → _cmd: vx={ros_cmd[0]:.2f} vy={ros_cmd[1]:.2f} wz={ros_cmd[2]:.2f}")
     elif bridge_server.connected:
-        if _frame_count % 100 == 0:
-            print(f"[run_sim] get_latest_cmd_vel=None, conn=True, ever_recv={_ever_received_ros_cmd}")
+        log_throttled("no_cmd",
+                      f"[run_sim] get_latest_cmd_vel=None, conn=True, ever_recv={_ever_received_ros_cmd}")
         if _ever_received_ros_cmd:
             # 之前收到过 ROS cmd_vel 但超时 → 安全停车
             if _cmd[0] != 0 or _cmd[1] != 0 or _cmd[2] != 0:
@@ -292,30 +357,52 @@ def on_render_step():
     # else: 从未收到 ROS cmd 或 bridge 未连接 → 保留键盘 _cmd
 
     # ---- 发布 POSE ----
-    if now - _last_pose_time >= _pose_interval and _body_prim.IsValid():
+    if now - _last_pose_time + 1e-9 >= _pose_interval and _body_prim.IsValid():
         mat = get_robot_world_transform(_body_prim)
         x, y, z = mat[0, 3], mat[1, 3], mat[2, 3]
         # 从 3x3 旋转矩阵提取完整四元数 (保留 roll/pitch/yaw)
         qx, qy, qz, qw = mat3_to_quat(mat[:3, :3])
+        linear, angular = pose_twist(_previous_pose_sample, mat, now)
         bridge_server.send_pose(
             x, y, z, qx, qy, qz, qw,
-            vx=_cmd[0], vy=_cmd[1], wz=_cmd[2],
+            vx=linear[0], vy=linear[1], vz=linear[2],
+            wx=angular[0], wy=angular[1], wz=angular[2],
             timestamp=now,
         )
+        _previous_pose_sample = (mat.copy(), now)
         _last_pose_time = now
 
     # ---- 发布 POINTCLOUD ----
-    if now - _last_pc_time >= _pc_interval and suite is not None:
+    if now - _last_pc_time + 1e-9 >= _pc_interval and suite is not None:
         lidar_data = suite.get_data_by_type("lidar")
-        for data in lidar_data.values():
+        for name, data in lidar_data.items():
+            if 'error' in data:
+                if now-_last_scan_warning > 2.0:
+                    print(f"[LIDAR] rejected observation: {data['error']}")
+                    _last_scan_warning = now
+                continue
+            if not fresh_scan(data, _last_scan_ns.get(name, -1), now, _observation_epoch):
+                continue
+            _last_scan_ns[name] = data['scan_stamp_ns']
             pc_world = data.get("point_cloud")
             if pc_world is not None and len(pc_world) > 0:
+                body_lidar = suite.sensor_to_body(name)
+                body_world = data['lidar_to_world'] @ np.linalg.inv(body_lidar)
+                if _self_filter_enabled:
+                    pc_world = filter_body_returns(pc_world, data['lidar_to_world'], body_lidar,
+                        config['kinematic_car']['size'], _self_filter_margin,
+                        body_shape=config['kinematic_car'].get('body_shape', 'box'),
+                        cylinder_radius=config['kinematic_car'].get('cylinder_radius', .25),
+                        cylinder_offset=config['kinematic_car'].get('cylinder_offset', .18))
+                if len(pc_world) == 0:
+                    continue
+                pose = [*body_world[:3,3].tolist(), *mat3_to_quat(body_world[:3,:3])]
                 bridge_server.send_pointcloud(
-                    pc_world, frame_id="map", timestamp=now)
+                    pc_world, frame_id="map", timestamp=data['measurement_stamp'], body_pose=pose)
         _last_pc_time = now
 
     # ---- 发布 IMAGE ----
-    if now - _last_img_time >= _img_interval and suite is not None:
+    if now - _last_img_time + 1e-9 >= _img_interval and suite is not None:
         camera_data = suite.get_data_by_type("camera")
         for name, data in camera_data.items():
             rgb = data.get("rgb")
@@ -325,7 +412,7 @@ def on_render_step():
         _last_img_time = now
 
     # ---- 发布 IMU ----
-    if now - _last_imu_time >= _imu_interval and suite is not None:
+    if now - _last_imu_time + 1e-9 >= _imu_interval and suite is not None:
         imu_data = suite.get_data_by_type("imu")
         for name, data in imu_data.items():
             lin_acc = data.get("lin_acc")
@@ -434,7 +521,9 @@ def _save_screenshot():
 
 def _reset_robot():
     """将机器人传送回初始出生点, 清零速度"""
-    global _cmd
+    global _cmd, _previous_pose_sample, _observation_epoch
+    _previous_pose_sample = None
+    _observation_epoch = world.current_time
     try:
         robot.robot.set_world_pose(position=_spawn_pos, orientation=_spawn_ori)
         robot.robot.set_linear_velocity(np.zeros(3, dtype=np.float32))
@@ -448,7 +537,7 @@ def _reset_robot():
 # ---- 主循环 ----
 
 def main():
-    global _frame_count
+    global _frame_count, _previous_pose_sample, _observation_epoch
 
     # 启动 TCP 桥接
     bridge_server.start()
@@ -486,6 +575,8 @@ def main():
 
             # 等待用户点击 PLAY
             if not world.is_playing():
+                _previous_pose_sample = None
+                _observation_epoch = world.current_time
                 continue
 
             # 检测 stop → play 重新初始化

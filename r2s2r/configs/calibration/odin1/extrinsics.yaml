@@ -27,14 +27,17 @@
 ref_imu:
   name: imu_center
   frequency: 200
-  # T_body_rimu: 安装变换 (含仿真 z 偏移 0.20m)
+  # T_body_rimu = T_body_lidar * inverse(T_rimu_lidar).
+  # The lidar origin is [0.43, 0, 0.10] in base_link, facing +X.
+  # Preserve the calibrated relative transforms within the sensor suite.
   mount_extrinsics:
-    translation: [0.0, 0.0, 0.50]
-    rotation: [1.0, 0.0, 0.0, 0.0]
+    translation: [0.458012319746, -0.024932621673, 0.065963432621]
+    rotation: [0.999952424988, -0.008260020031, -0.002110005117, -0.004740011495]
 
 # 其余传感器，extrinsics 均为 T_rimu_sensor (相对于 ref_imu)
 sensors:
   camera1:
+    enabled: false
     type: camera
     intrinsics_file: "intrinsics_camera1.yaml"
     extrinsics:                              # T_rimu_camera1

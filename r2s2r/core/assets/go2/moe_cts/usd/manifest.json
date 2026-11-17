@@ -1,0 +1,12 @@
+{
+  "Isaac/IsaacLab/Robots/Unitree/Go2/go2.usd": {
+    "url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/IsaacLab/Robots/Unitree/Go2/go2.usd",
+    "sha256": "ba171c972b987d8c8fb7157ccad2ba9c0c1fed105755d2d8af46bef96cc11c6d",
+    "bytes": 8142
+  },
+  "Isaac/IsaacLab/Robots/Unitree/Go2/Props/instanceable_meshes.usd": {
+    "url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/IsaacLab/Robots/Unitree/Go2/Props/instanceable_meshes.usd",
+    "sha256": "2902646d0f4c13c9ecae3ac9046e32c7d18902eef9679de9829f642a15c93fb5",
+    "bytes": 18802187
+  }
+}
