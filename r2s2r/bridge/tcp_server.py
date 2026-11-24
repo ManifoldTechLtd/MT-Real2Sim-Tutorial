@@ -99,11 +99,13 @@ class TcpBridgeServer:
         msg = encode_pointcloud(xyz, frame_id, timestamp, body_pose)
         self._send_queue.append(msg)
 
-    def send_image(self, rgb, frame_id="camera", quality=80, timestamp=None):
+    def send_image(self, rgb, frame_id="camera", quality=80, timestamp=None,
+                   intrinsics=None, body_to_camera=None):
         """发送 IMAGE 消息 (JPEG 压缩, 非阻塞)"""
         if rgb is None or rgb.size == 0:
             return
-        msg = encode_image(rgb, frame_id, quality, timestamp)
+        msg = encode_image(rgb, frame_id, quality, timestamp,
+                           intrinsics=intrinsics, body_to_camera=body_to_camera)
         self._send_queue.append(msg)
 
     def send_imu(self, lin_acc, ang_vel, orientation=None,

@@ -3,6 +3,7 @@
   <arg name="tcp_host" default="localhost"/>
   <arg name="tcp_port" default="9090"/>
   <arg name="tf_profile" default="odin1"/>
+  <arg name="frame_layout" default="legacy"/>
   <!-- Set before starting consumers; Isaac and the bridge must use the same clock. -->
   <param name="/use_sim_time" value="true"/>
 

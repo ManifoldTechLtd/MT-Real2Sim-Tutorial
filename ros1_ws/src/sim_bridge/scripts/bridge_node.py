@@ -47,6 +47,7 @@ from protocol import (
     encode_cmd_vel, encode_reset, decode_message,
     MSG_POSE, MSG_POINTCLOUD, MSG_IMAGE, MSG_IMU, MSG_CLOCK, HEADER_SIZE,
 )
+from frame_math import compose_pose
 
 
 class BridgeNode:
@@ -84,6 +85,13 @@ class BridgeNode:
         self.imu_offset = rospy.get_param("~imu_offset_xyz", [0.0, 0.0, 0.5])
         self.imu_rotation = rospy.get_param("~imu_rotation_xyzw", [0.0, 0.0, 0.0, 1.0])
 
+        # ONS2 integration: odin mode publishes odom->imu (sensor pose) and lets
+        # the navigation launch own imu->odin1_base_link->base_link.
+        self.frame_layout = rospy.get_param("~frame_layout", "legacy").strip().lower()
+        self.publish_odin1_aliases = rospy.get_param("~publish_odin1_aliases", True)
+        if self.frame_layout not in ("legacy", "odin"):
+            raise ValueError(f"unknown frame_layout: {self.frame_layout}")
+
         # Publishers
         self.clock_pub = rospy.Publisher("/clock", Clock, queue_size=10) if self.use_sim_time else None
         self.odom_pub = rospy.Publisher("/state_estimation", Odometry, queue_size=10)
@@ -92,6 +100,17 @@ class BridgeNode:
         self._odom_tf_stamps = deque(maxlen=256)
         self.img_pub = rospy.Publisher("/camera/image/compressed", CompressedImage, queue_size=5)
         self.imu_pub = rospy.Publisher("/imu/data", Imu, queue_size=50)
+
+        self.odin_odom_pub = None
+        self.odin_cloud_pub = None
+        self.odin_img_pub = None
+        self.odin_imu_pub = None
+        if self.publish_odin1_aliases:
+            self.odin_odom_pub = rospy.Publisher("/odin1/odometry", Odometry, queue_size=10)
+            self.odin_cloud_pub = rospy.Publisher("/odin1/cloud_slam", PointCloud2, queue_size=5)
+            self.odin_img_pub = rospy.Publisher("/odin1/image/compressed", CompressedImage, queue_size=5)
+            self.odin_imu_pub = rospy.Publisher("/odin1/imu", Imu, queue_size=50)
+
         self.tf_broadcaster = tf.TransformBroadcaster()
         self.static_tf_broadcaster = tf2_ros.StaticTransformBroadcaster()
         self._publish_static_tfs()
@@ -113,8 +132,9 @@ class BridgeNode:
         self.reset_lock = threading.Lock()
         self.reset_requested = False
 
-        rospy.loginfo(f"[sim_bridge] Target: {self.host}:{self.port}")
-        rospy.loginfo(f"[sim_bridge] TF: {self.map_frame} → {self.odom_frame} → {self.base_frame}")
+        rospy.loginfo(f"[sim_bridge] Target: {self.host}:{self.port} layout={self.frame_layout}")
+        rospy.loginfo(f"[sim_bridge] TF: {self.map_frame} → {self.odom_frame} → "
+                      f"{self.imu_frame if self.frame_layout == 'odin' else self.base_frame}")
         rospy.loginfo(f"[sim_bridge] Static: {self.footprint_frame} (z=-{self.base_height}), "
                       f"{self.sensor_base_frame}={self.sensor_base_offset}, "
                       f"{self.lidar_frame}={self.lidar_offset}, "
@@ -139,6 +159,7 @@ class BridgeNode:
     def _publish_static_tfs(self):
         """
         启动时发布所有静态 TF (拓扑在文件头 docstring).
+        odin 布局下传感器边由导航栈 launch 发布, 这里只保留 map→odom。
         """
         now = rospy.Time.now()
         tfs = [
@@ -147,21 +168,30 @@ class BridgeNode:
             # base_link → base_footprint (足底在地面)
             self._make_static_tf(self.base_frame, self.footprint_frame,
                                  [0, 0, -self.base_height], now),
-            # base_link → odin1_base_link (传感器套件安装外参)
-            self._make_static_tf(self.base_frame, self.sensor_base_frame,
-                                 self.sensor_base_offset, now,
-                                 self.sensor_base_rotation),
-            # odin1_base_link → lidar1 (套件内 LiDAR 外参)
-            self._make_static_tf(self.sensor_base_frame, self.lidar_frame,
-                                 self.lidar_offset, now, self.lidar_rotation),
-            # base_link → camera1
-            self._make_static_tf(self.base_frame, self.camera_frame,
-                                 self.camera_offset, now, self.camera_rotation),
-            # base_link → imu_link
-            self._make_static_tf(self.base_frame, self.imu_frame,
-                                 self.imu_offset, now, self.imu_rotation),
         ]
+        if self.frame_layout != "odin":
+            tfs.extend([
+                # base_link → odin1_base_link (传感器套件安装外参)
+                self._make_static_tf(self.base_frame, self.sensor_base_frame,
+                                     self.sensor_base_offset, now,
+                                     self.sensor_base_rotation),
+                # odin1_base_link → lidar1 (套件内 LiDAR 外参)
+                self._make_static_tf(self.sensor_base_frame, self.lidar_frame,
+                                     self.lidar_offset, now, self.lidar_rotation),
+                # base_link → camera1
+                self._make_static_tf(self.base_frame, self.camera_frame,
+                                     self.camera_offset, now, self.camera_rotation),
+                # base_link → imu_link
+                self._make_static_tf(self.base_frame, self.imu_frame,
+                                     self.imu_offset, now, self.imu_rotation),
+            ])
         self.static_tf_broadcaster.sendTransform(tfs)
+
+    def _sensor_pose(self, xyz, quat):
+        """Body pose -> ODIN sensor pose for the odin layout."""
+        return compose_pose(list(xyz), list(quat),
+                            list(self.sensor_base_offset),
+                            list(self.sensor_base_rotation))
 
     def cmd_vel_callback(self, msg):
         """ROS /cmd_vel → 缓存, 由发送线程转发到 TCP"""
@@ -303,38 +333,57 @@ class BridgeNode:
             self.publish_imu(payload)
 
     def publish_odometry(self, data):
-        """发布 Odometry + TF (odom → base_link)"""
+        """发布 Odometry + TF (legacy: odom→base_link, odin: odom→imu)"""
+        stamp = rospy.Time.from_sec(data["ts"])
+        body_xyz = (data["x"], data["y"], data["z"])
+        body_quat = (data["qx"], data["qy"], data["qz"], data["qw"])
+
+        odom = self._make_odometry(stamp, self.base_frame, body_xyz, body_quat, data)
+        self.odom_pub.publish(odom)
+
+        if self.frame_layout == "odin":
+            sensor_xyz, sensor_quat = self._sensor_pose(body_xyz, body_quat)
+            if self.odin_odom_pub is not None:
+                self.odin_odom_pub.publish(
+                    self._make_odometry(stamp, self.imu_frame, sensor_xyz, sensor_quat, data))
+            tf_parent = self.odom_frame
+            tf_child = self.imu_frame
+            tf_xyz, tf_quat = sensor_xyz, sensor_quat
+        else:
+            if self.odin_odom_pub is not None:
+                self.odin_odom_pub.publish(odom)
+            tf_parent = self.odom_frame
+            tf_child = self.base_frame
+            tf_xyz, tf_quat = body_xyz, body_quat
+
+        self.tf_broadcaster.sendTransform(
+            tuple(float(v) for v in tf_xyz),
+            tuple(float(v) for v in tf_quat),
+            stamp,
+            tf_child,
+            tf_parent,
+        )
+        self._odom_tf_stamps.append(stamp)
+
+    def _make_odometry(self, stamp, child_frame, xyz, quat, data):
         odom = Odometry()
-        odom.header.stamp = rospy.Time.from_sec(data["ts"])
+        odom.header.stamp = stamp
         odom.header.frame_id = self.odom_frame
-        odom.child_frame_id = self.base_frame
-
-        odom.pose.pose.position.x = data["x"]
-        odom.pose.pose.position.y = data["y"]
-        odom.pose.pose.position.z = data["z"]
-        odom.pose.pose.orientation.x = data["qx"]
-        odom.pose.pose.orientation.y = data["qy"]
-        odom.pose.pose.orientation.z = data["qz"]
-        odom.pose.pose.orientation.w = data["qw"]
-
+        odom.child_frame_id = child_frame
+        odom.pose.pose.position.x = float(xyz[0])
+        odom.pose.pose.position.y = float(xyz[1])
+        odom.pose.pose.position.z = float(xyz[2])
+        odom.pose.pose.orientation.x = float(quat[0])
+        odom.pose.pose.orientation.y = float(quat[1])
+        odom.pose.pose.orientation.z = float(quat[2])
+        odom.pose.pose.orientation.w = float(quat[3])
         odom.twist.twist.linear.x = data.get("vx", 0.0)
         odom.twist.twist.linear.y = data.get("vy", 0.0)
         odom.twist.twist.linear.z = data.get("vz", 0.0)
         odom.twist.twist.angular.x = data.get("wx", 0.0)
         odom.twist.twist.angular.y = data.get("wy", 0.0)
         odom.twist.twist.angular.z = data.get("wz", 0.0)
-
-        self.odom_pub.publish(odom)
-
-        # TF: odom → odin1_base_link
-        self.tf_broadcaster.sendTransform(
-            (data["x"], data["y"], data["z"]),
-            (data["qx"], data["qy"], data["qz"], data["qw"]),
-            odom.header.stamp,
-            self.base_frame,
-            self.odom_frame,
-        )
-        self._odom_tf_stamps.append(odom.header.stamp)
+        return odom
 
     def publish_pointcloud(self, data):
         """发布 PointCloud2"""
@@ -360,8 +409,17 @@ class BridgeNode:
             # Insert the historical measured pose into TF without replacing the
             # current odometry message. map -> odom is identity in this bridge.
             if header.stamp not in self._odom_tf_stamps:
-                self.tf_broadcaster.sendTransform(tuple(pose[:3]), tuple(pose[3:]/np.linalg.norm(pose[3:])),
-                    header.stamp, self.base_frame, self.odom_frame)
+                quat = tuple(pose[3:] / np.linalg.norm(pose[3:]))
+                if self.frame_layout == "odin":
+                    tf_xyz, tf_quat = self._sensor_pose(tuple(pose[:3]), quat)
+                    child = self.imu_frame
+                else:
+                    tf_xyz, tf_quat = tuple(pose[:3]), quat
+                    child = self.base_frame
+                self.tf_broadcaster.sendTransform(
+                    tuple(float(v) for v in tf_xyz),
+                    tuple(float(v) for v in tf_quat),
+                    header.stamp, child, self.odom_frame)
         self._last_cloud_stamp = stamp
 
         fields = [
@@ -371,6 +429,8 @@ class BridgeNode:
         ]
         msg = pc2.create_cloud(header, fields, xyz.tolist())
         self.pc_pub.publish(msg)
+        if self.odin_cloud_pub is not None:
+            self.odin_cloud_pub.publish(msg)
 
 
     def publish_image(self, data):
@@ -381,6 +441,8 @@ class BridgeNode:
         msg.format = "jpeg"
         msg.data = data["data"]
         self.img_pub.publish(msg)
+        if self.odin_img_pub is not None:
+            self.odin_img_pub.publish(msg)
 
     def publish_imu(self, data):
         """发布 Imu"""
@@ -406,6 +468,8 @@ class BridgeNode:
             msg.orientation_covariance[0] = -1.0
 
         self.imu_pub.publish(msg)
+        if self.odin_imu_pub is not None:
+            self.odin_imu_pub.publish(msg)
 
 
 if __name__ == "__main__":

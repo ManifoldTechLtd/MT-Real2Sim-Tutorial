@@ -116,13 +116,16 @@ def encode_reset(to_start: bool = True) -> bytes:
 
 
 def encode_image(rgb: np.ndarray, frame_id: str = "camera",
-                 quality: int = 80, timestamp=None) -> bytes:
+                 quality: int = 80, timestamp=None,
+                 intrinsics: dict = None, body_to_camera=None) -> bytes:
     """编码 IMAGE 消息 (JPEG 压缩)
     Args:
         rgb: ndarray (H, W, 3), uint8 RGB 图像
         frame_id: 坐标系名称
         quality: JPEG 压缩质量 (1-100)
         timestamp: 时间戳
+        intrinsics: 相机内参 (与渲染器一致), 可选
+        body_to_camera: (xyz, quat_xyzw) T_body_camera, 可选
     """
     import cv2
     if timestamp is None:
@@ -139,6 +142,17 @@ def encode_image(rgb: np.ndarray, frame_id: str = "camera",
         "encoding": "jpeg",
         "data": jpeg_buf.tobytes(),
     }
+    if intrinsics is not None:
+        payload["intrinsics"] = {
+            k: (int(v) if k in ('width', 'height') else float(v))
+            for k, v in intrinsics.items()
+            if k in ('fx', 'fy', 'cx', 'cy', 'width', 'height')}
+    if body_to_camera is not None:
+        xyz, quat = body_to_camera
+        payload["body_to_camera"] = {
+            "xyz": [float(v) for v in xyz],
+            "quat_xyzw": [float(v) for v in quat],
+        }
     return encode_message(MSG_IMAGE, payload)
 
 
