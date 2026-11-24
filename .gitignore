@@ -42,3 +42,9 @@ dataset/
 
 # Local simulator diagnostic captures
 hang_logs/
+
+# local scenes (not redistributable)
+dataset/
+
+# scene-specific LiDAR color LUTs (generated)
+integrations/ons2/color_luts/*.npz
