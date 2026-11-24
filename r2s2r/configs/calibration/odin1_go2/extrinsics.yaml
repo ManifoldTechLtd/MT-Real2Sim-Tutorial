@@ -20,7 +20,7 @@ ref_imu:
 
 sensors:
   camera1:
-    enabled: false
+    enabled: true
     type: camera
     intrinsics_file: "../odin1/intrinsics_camera1.yaml"
     extrinsics:                              # T_rimu_camera1

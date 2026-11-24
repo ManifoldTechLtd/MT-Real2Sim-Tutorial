@@ -30,9 +30,18 @@ import yaml
 with open(config_path) as f:
     _cfg = yaml.safe_load(f)
 headless = args.headless or _cfg.get("simulation", {}).get("headless", False)
+_sim_cfg = _cfg.get("simulation", {})
+app_settings = {"headless": headless}
+if not headless:
+    win_w = _sim_cfg.get("window_width")
+    win_h = _sim_cfg.get("window_height")
+    if win_w and win_h:
+        app_settings["width"] = int(win_w)
+        app_settings["height"] = int(win_h)
 
-simulation_app = SimulationApp({"headless": headless})
-print(f"[run_sim] SimulationApp started (headless={headless})")
+simulation_app = SimulationApp(app_settings)
+print(f"[run_sim] SimulationApp started (headless={headless}, "
+      f"window={app_settings.get('width', 'default')}x{app_settings.get('height', 'default')})")
 
 # ---- SimulationApp 启动后, 插入项目路径 ----
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -46,7 +55,7 @@ from pxr import Usd, UsdGeom
 from r2s2r.core.scene_builder import load_config
 from r2s2r.core.robot_factory import build_quadruped_scene, physics_dt_for
 from r2s2r.bridge.tcp_server import TcpBridgeServer
-from r2s2r.core.observation import filter_body_returns, fresh_scan
+from r2s2r.core.observation import filter_body_returns, fresh_scan, fresh_camera_frame
 from r2s2r.core.log_rate import log_throttled
 
 # ---- 加载配置 ----
@@ -229,6 +238,7 @@ _last_pc_time = 0.0
 _last_img_time = 0.0
 _last_imu_time = 0.0
 _last_scan_ns = {}
+_last_camera_stamps = {}
 _observation_epoch = world.current_time
 _last_scan_warning = 0.0
 
@@ -254,6 +264,10 @@ def reset_robot(to_start: bool = False):
     global _need_reinit, _previous_pose_sample, _observation_epoch
     _previous_pose_sample = None
     _observation_epoch = world.current_time
+    _last_camera_stamps.clear()
+    if suite is not None:
+        for writer in suite._camera_writers.values():
+            writer.latest = {}
     try:
         pos, quat = robot.robot.get_world_pose()
         if pos is None or quat is None:
@@ -405,10 +419,19 @@ def on_render_step():
     if now - _last_img_time + 1e-9 >= _img_interval and suite is not None:
         camera_data = suite.get_data_by_type("camera")
         for name, data in camera_data.items():
+            if not fresh_camera_frame(data, _last_camera_stamps.get(name, -1),
+                                      now, _observation_epoch):
+                continue
             rgb = data.get("rgb")
             if rgb is not None and rgb.size > 0:
-                bridge_server.send_image(rgb, frame_id=name,
-                                         quality=_img_quality, timestamp=now)
+                body_cam = suite.sensor_to_body(name)
+                bridge_server.send_image(
+                    rgb, frame_id=name, quality=_img_quality,
+                    timestamp=data['measurement_stamp'],
+                    intrinsics=suite.camera_intrinsics(name),
+                    body_to_camera=(body_cam[:3, 3].tolist(),
+                                    mat3_to_quat(body_cam[:3, :3])))
+                _last_camera_stamps[name] = data['measurement_stamp']
         _last_img_time = now
 
     # ---- 发布 IMU ----
@@ -524,6 +547,10 @@ def _reset_robot():
     global _cmd, _previous_pose_sample, _observation_epoch
     _previous_pose_sample = None
     _observation_epoch = world.current_time
+    _last_camera_stamps.clear()
+    if suite is not None:
+        for writer in suite._camera_writers.values():
+            writer.latest = {}
     try:
         robot.robot.set_world_pose(position=_spawn_pos, orientation=_spawn_ori)
         robot.robot.set_linear_velocity(np.zeros(3, dtype=np.float32))
@@ -537,39 +564,41 @@ def _reset_robot():
 # ---- 主循环 ----
 
 def main():
-    global _frame_count, _previous_pose_sample, _observation_epoch
-
-    # 启动 TCP 桥接
-    bridge_server.start()
-
-    # World 初始化
-    world.reset()
-    robot.initialize()
-    if suite:
-        suite.initialize()
-    print("[run_sim] World reset, robot and sensors initialized")
-
-    # 注册物理回调 (必须在 play/pause 之前)
-    world.add_physics_callback("rl_policy", on_physics_step)
-
-    # 设置键盘 (必须在 world 初始化后)
-    _setup_keyboard()
-
-    # 管理仿真播放状态 (关键! 参考 01_quadruped_nav.py)
-    # 自动开始播放（headless 和 GUI 模式都自动开始）
-    world.play()
-    print("[run_sim] Auto play enabled")
-
-    print("=" * 60)
-    print(f"[run_sim] TCP bridge: {bridge_cfg.get('host', '0.0.0.0')}:{bridge_cfg.get('port', 9090)}")
-    print(f"[run_sim] Robot: {config['quadruped']['robot_type']}")
-    print(f"[run_sim] Keyboard: WASD+QE=move, R=reset, P=screenshot (click viewport first)")
-    print(f"[run_sim] GUI mode: click [▶ PLAY] button in Isaac Sim to start")
-    print("=" * 60)
-
-    _diag_time = time.time()
+    global _frame_count, _previous_pose_sample, _observation_epoch, _last_img_time
+    suite_initialized = False
 
     try:
+        # 启动 TCP 桥接
+        bridge_server.start()
+
+        # World 初始化
+        world.reset()
+        robot.initialize()
+        if suite:
+            suite.initialize()
+            suite_initialized = True
+        print("[run_sim] World reset, robot and sensors initialized")
+
+        # 注册物理回调 (必须在 play/pause 之前)
+        world.add_physics_callback("rl_policy", on_physics_step)
+
+        # 设置键盘 (必须在 world 初始化后)
+        _setup_keyboard()
+
+        # 管理仿真播放状态 (关键! 参考 01_quadruped_nav.py)
+        # 自动开始播放（headless 和 GUI 模式都自动开始）
+        world.play()
+        print("[run_sim] Auto play enabled")
+
+        print("=" * 60)
+        print(f"[run_sim] TCP bridge: {bridge_cfg.get('host', '0.0.0.0')}:{bridge_cfg.get('port', 9090)}")
+        print(f"[run_sim] Robot: {config['quadruped']['robot_type']}")
+        print(f"[run_sim] Keyboard: WASD+QE=move, R=reset, P=screenshot (click viewport first)")
+        print(f"[run_sim] GUI mode: click [▶ PLAY] button in Isaac Sim to start")
+        print("=" * 60)
+
+        _diag_time = time.time()
+
         while simulation_app.is_running():
             world.step(render=True)
 
@@ -577,6 +606,11 @@ def main():
             if not world.is_playing():
                 _previous_pose_sample = None
                 _observation_epoch = world.current_time
+                _last_camera_stamps.clear()
+                _last_img_time = 0.0
+                if suite_initialized:
+                    for writer in suite._camera_writers.values():
+                        writer.latest = {}
                 continue
 
             # 检测 stop → play 重新初始化
@@ -598,10 +632,15 @@ def main():
     except KeyboardInterrupt:
         print("\n[run_sim] Interrupted")
     finally:
-        bridge_server.stop()
-        print("[run_sim] Bridge stopped")
-
-    simulation_app.close()
+        try:
+            bridge_server.stop()
+            print("[run_sim] Bridge stopped")
+        finally:
+            try:
+                if suite_initialized:
+                    suite.close()
+            finally:
+                simulation_app.close()
     print("[run_sim] Done")
 
 

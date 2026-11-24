@@ -18,7 +18,7 @@ import logging
 import tempfile
 import numpy as np
 import yaml
-from r2s2r.core.observation import rigid_transform, decode_lidar_frame
+from r2s2r.core.observation import rigid_transform, decode_lidar_frame, decode_camera_frame
 
 # 文件日志
 _log_path = os.path.join(tempfile.gettempdir(), "sensor_suite_debug.log")
@@ -48,6 +48,15 @@ def _intrinsics_to_usd_camera_params(fx, fy, width, height):
     focal_length = fx * h_aperture / width  # mm
     v_aperture = focal_length * height / fy  # mm
     return focal_length, h_aperture, v_aperture
+
+
+def scale_pinhole_intrinsics(width, height, fx, fy, scale):
+    """Scale rendered camera intrinsics for a lower-resolution render product."""
+    if not np.isfinite(scale) or scale <= 0:
+        raise ValueError('camera render scale must be positive and finite')
+    scaled_w = max(2, int(round(float(width) * scale)))
+    scaled_h = max(2, int(round(float(height) * scale)))
+    return scaled_w, scaled_h, float(fx) * scale, float(fy) * scale
 
 
 def _set_or_create_attr(prim, attr_name, value, type_name):
@@ -88,6 +97,30 @@ def create_lidar_writer(render_product):
     return writer
 
 
+def create_camera_writer(render_product):
+    """Cache only the latest frame-delivered RGB and simulation time."""
+    import omni.replicator.core as rep
+
+    class CameraWriter(rep.Writer):
+        def __init__(self):
+            self.annotators = [
+                rep.AnnotatorRegistry.get_annotator('rgb', device='cpu'),
+                rep.AnnotatorRegistry.get_annotator('IsaacReadSimulationTime',
+                    init_params={'resetOnStop': True}),
+            ]
+            self.latest = {}
+
+        def write(self, data):
+            try:
+                self.latest = decode_camera_frame(data)
+            except (ValueError, KeyError, TypeError) as error:
+                self.latest = {'error': str(error)}
+
+    writer = CameraWriter()
+    writer.attach([render_product])
+    return writer
+
+
 class SensorSuite:
     """
     传感器套件: 从 calibration 目录读取外参 + 内参文件,
@@ -101,16 +134,18 @@ class SensorSuite:
     """
 
     def __init__(self, calibration_dir: str, parent_prim_path: str,
-                 sim_z_offset: float = 0.0):
+                 sim_z_offset: float = 0.0, camera_render_scale: float = 1.0):
         """
         Args:
             calibration_dir: calibration/ 目录的绝对路径
             parent_prim_path: 传感器挂载的父 prim 路径 (如 "/World/Quadruped/body")
             sim_z_offset: (仅旧格式) 仿真中所有传感器统一 z 偏移 (米).
                           新格式不需要此参数, 偏移已包含在 mount_extrinsics 中.
+            camera_render_scale: 相机渲染分辨率比例 (1.0=标定分辨率; 0.5=半分辨率).
         """
         self._calibration_dir = calibration_dir
         self._parent_prim_path = parent_prim_path
+        self._camera_render_scale = float(camera_render_scale)
 
         # 读取外参配置
         ext_path = os.path.join(calibration_dir, "extrinsics.yaml")
@@ -119,6 +154,9 @@ class SensorSuite:
         # 传感器实例字典
         self._sensors = {}
         self._lidar_writers = {}
+        self._camera_writers = {}
+        self._camera_render_products = {}
+        self._camera_intrinsics = {}
         # 传感器配置字典 (解析后)
         self._sensor_configs = {}
 
@@ -284,20 +322,35 @@ class SensorSuite:
         for name, sensor in self._sensors.items():
             sensor_type = self._sensor_configs[name]["type"]
             _log.info("initialize: %s (%s)", name, sensor_type)
-            sensor.initialize()
-            print(f"  [SensorSuite] 已初始化: {name} ({sensor_type})")
-
             if sensor_type == "camera":
-                try:
-                    sensor.add_distance_to_image_plane_to_frame()
-                    _log.info("  -> 深度 annotator 注册成功")
-                except Exception as e:
-                    _log.error("  -> 深度 annotator 注册失败: %s", e, exc_info=True)
+                import omni.replicator.core as rep
+
+                if name in self._camera_writers:
+                    self._camera_writers.pop(name).detach()
+                if name in self._camera_render_products:
+                    self._camera_render_products.pop(name).destroy()
+                render_product = rep.create.render_product(
+                    sensor.prim_path, sensor.get_resolution(), force_new=True)
+                self._camera_render_products[name] = render_product
+                self._camera_writers[name] = create_camera_writer(render_product)
+            else:
+                sensor.initialize()
+            print(f"  [SensorSuite] 已初始化: {name} ({sensor_type})")
 
             if sensor_type == "lidar":
                 if name in self._lidar_writers:
                     self._lidar_writers[name].detach()
                 self._lidar_writers[name] = create_lidar_writer(sensor.get_render_product_path())
+
+    def close(self):
+        """Detach owned writers before destroying owned camera render products."""
+        for writers in (self._camera_writers, self._lidar_writers):
+            for writer in writers.values():
+                writer.detach()
+            writers.clear()
+        for render_product in self._camera_render_products.values():
+            render_product.destroy()
+        self._camera_render_products.clear()
 
     def get_data(self) -> dict:
         """
@@ -305,7 +358,7 @@ class SensorSuite:
 
         Returns:
             dict: {sensor_name: data_dict}
-                camera data_dict: {"rgb": ndarray, "depth": ndarray}
+                camera data_dict: {"rgb": ndarray, "measurement_stamp": float}
                 lidar data_dict:  {"point_cloud": ndarray(N,3), "intensities": ndarray(N,)}
                 imu data_dict:    {"lin_acc": ndarray(3,), "ang_vel": ndarray(3,), "orientation": ndarray(4,)}
         """
@@ -314,7 +367,7 @@ class SensorSuite:
             sensor_type = self._sensor_configs[name]["type"]
             try:
                 if sensor_type == "camera":
-                    result[name] = self._get_camera_data(sensor)
+                    result[name] = self._camera_writers[name].latest
                 elif sensor_type == "lidar":
                     result[name] = self._lidar_writers[name].latest
                 elif sensor_type == "imu":
@@ -330,6 +383,10 @@ class SensorSuite:
         if self._use_rimu:
             transform = rigid_transform(self._mount_translation, self._mount_rotation) @ transform
         return transform
+
+    def camera_intrinsics(self, name):
+        """Rendered pinhole intrinsics for projection; None when not modellable."""
+        return self._camera_intrinsics.get(name)
 
     def get_data_by_type(self, sensor_type: str) -> dict:
         """
@@ -347,7 +404,7 @@ class SensorSuite:
                 continue
             try:
                 if sensor_type == "camera":
-                    result[name] = self._get_camera_data(sensor)
+                    result[name] = self._camera_writers[name].latest
                 elif sensor_type == "lidar":
                     result[name] = self._lidar_writers[name].latest
                 elif sensor_type == "imu":
@@ -397,6 +454,8 @@ class SensorSuite:
         height = intrinsics.get("height", intrinsics.get("image_height", 480))
         fx = intrinsics.get("fx", intrinsics.get("A11", 320.0))
         fy = intrinsics.get("fy", intrinsics.get("A22", 320.0))
+        width, height, fx, fy = scale_pinhole_intrinsics(
+            width, height, fx, fy, self._camera_render_scale)
 
         focal_length, h_aperture, v_aperture = _intrinsics_to_usd_camera_params(
             fx, fy, width, height
@@ -414,6 +473,17 @@ class SensorSuite:
         camera.prim.GetAttribute("focalLength").Set(focal_length)
         camera.prim.GetAttribute("horizontalAperture").Set(h_aperture)
         camera.prim.GetAttribute("verticalAperture").Set(v_aperture)
+
+        # 实际渲染的针孔投影：主点固定在图像中心 (USD 相机语义)
+        self._camera_intrinsics[name] = {
+            'model': 'pinhole',
+            'fx': float(focal_length / h_aperture * width),
+            'fy': float(focal_length / v_aperture * height),
+            'width': int(width),
+            'height': int(height),
+            'cx': float(width) * 0.5,
+            'cy': float(height) * 0.5,
+        }
 
         print(f"    Camera '{name}' [pinhole]: {width}x{height}, fl={focal_length:.2f}mm, "
               f"pos={cfg['translation'].tolist()}")
@@ -441,6 +511,17 @@ class SensorSuite:
         A22 = intrinsics["A22"]
         u0 = intrinsics["u0"]
         v0 = intrinsics["v0"]
+        scale = self._camera_render_scale
+        if not np.isfinite(scale) or scale <= 0:
+            raise ValueError('camera render scale must be positive and finite')
+        if abs(scale - 1.0) > 1e-6:
+            width = max(2, int(round(width * scale)))
+            height = max(2, int(round(height * scale)))
+            A11 *= scale
+            A12 *= scale
+            A22 *= scale
+            u0 *= scale
+            v0 *= scale
         max_angle_deg = intrinsics.get("maxIncidentAngle", 120)
         max_fov = max_angle_deg * 2.0  # 单侧→全角
 
@@ -770,21 +851,6 @@ class SensorSuite:
         return imu
 
     # ---- 内部数据获取方法 ----
-
-    @staticmethod
-    def _get_camera_data(camera) -> dict:
-        """获取 Camera 的 RGB 和 Depth 数据"""
-        data = {}
-        rgb = camera.get_rgb()
-        if rgb is not None and rgb.size > 0:
-            data["rgb"] = rgb
-
-        cf = camera.get_current_frame()
-        depth_raw = cf.get("distance_to_image_plane")
-        if depth_raw is not None:
-            data["depth"] = np.squeeze(depth_raw).astype(np.float32)
-
-        return data
 
     @staticmethod
     def _get_imu_data(imu) -> dict:

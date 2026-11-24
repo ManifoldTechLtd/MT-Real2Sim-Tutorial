@@ -142,7 +142,10 @@ def build_quadruped_scene(world, config: dict):
             "parent_prim_path", body_prim_path
         )
         sim_z_offset = (config.get("sensor_suite") or {}).get("sim_z_offset", 0.0)
-        suite = SensorSuite(calibration_dir, parent_prim, sim_z_offset=sim_z_offset)
+        camera_render_scale = float(
+            (config.get("sensor_suite") or {}).get("camera_render_scale", 1.0))
+        suite = SensorSuite(calibration_dir, parent_prim, sim_z_offset=sim_z_offset,
+                            camera_render_scale=camera_render_scale)
         suite.build(world)
 
     return robot, suite, body_prim_path

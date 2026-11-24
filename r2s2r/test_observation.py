@@ -125,6 +125,7 @@ class ObservationTest(unittest.TestCase):
                'pc2':SimpleNamespace(create_cloud=lambda header,fields,xyz:(header,xyz))}
         exec(compile(ast.Module(body=[method],type_ignores=[]),'bridge_method','exec'),scope)
         bridge=SimpleNamespace(_last_cloud_stamp=0.,_odom_tf_stamps=(),use_sim_time=False,map_frame='map',odom_frame='odom',base_frame='base_link',
+            frame_layout='legacy',odin_cloud_pub=None,
             tf_broadcaster=SimpleNamespace(sendTransform=lambda *args:events.append(('tf',args))),
             pc_pub=SimpleNamespace(publish=lambda msg:events.append(('cloud',msg))))
         data={'xyz':np.array([[1,0,0]]),'ts':100.,'frame_id':'map','body_pose':[2,3,.25,0,0,0,1]}

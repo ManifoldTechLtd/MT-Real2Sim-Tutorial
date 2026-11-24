@@ -93,7 +93,7 @@ class SimulationClockTest(unittest.TestCase):
             Time=SimpleNamespace(from_sec=lambda t:t,now=lambda:None)),
             pc2=SimpleNamespace(create_cloud=lambda h,f,p:h))
         bridge=SimpleNamespace(use_sim_time=True,_sim_time=2.,_last_cloud_stamp=0.,
-            pc_pub=SimpleNamespace(publish=lambda x:events.append(x)))
+            odin_cloud_pub=None,pc_pub=SimpleNamespace(publish=lambda x:events.append(x)))
         publish=scope['publish_pointcloud']
         publish(bridge,{'ts':1.9,'xyz':np.ones((1,3))})
         publish(bridge,{'ts':1.9,'xyz':np.ones((1,3))})

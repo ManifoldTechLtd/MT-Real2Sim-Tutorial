@@ -44,6 +44,24 @@ def fresh_scan(observation, last_scan_ns, now, not_before, timeout=1.0):
             and now-stamp <= timeout and observation.get('scan_stamp_ns', -1) > last_scan_ns)
 
 
+def decode_camera_frame(frame):
+    """Own the RGB pixels and capture time from one render-product batch."""
+    rgb = np.asarray(frame['rgb'])
+    if (rgb.dtype != np.uint8 or rgb.ndim != 3 or rgb.shape[2] not in (3, 4)
+            or rgb.shape[0] == 0 or rgb.shape[1] == 0):
+        raise ValueError('invalid camera RGB array')
+    stamp = float(frame['IsaacReadSimulationTime']['simulationTime'])
+    if not math.isfinite(stamp) or stamp < 0:
+        raise ValueError('invalid camera measurement time')
+    return {'rgb': rgb[:, :, :3].copy(order='C'), 'measurement_stamp': stamp}
+
+
+def fresh_camera_frame(observation, last_stamp, now, not_before, timeout=1.0):
+    stamp = observation.get('measurement_stamp', float('nan'))
+    return (math.isfinite(stamp) and not_before < stamp <= now
+            and now - stamp <= timeout and stamp > last_stamp)
+
+
 def decode_lidar_frame(frame):
     """Decode one render-product writer batch; do not infer times from polling.
 
