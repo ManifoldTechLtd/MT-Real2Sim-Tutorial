@@ -53,6 +53,14 @@ Sensor debug output goes to the process temporary directory, allowing the
 source tree to remain mounted read-only. No captured logs, memory maps,
 recordings or private scene paths are committed.
 
+Heavy NuRec scenes expose three quality knobs while keeping the GUI enabled:
+`sensor_suite.camera_render_scale` (0.5 renders the camera at 800x648 and scales
+the projection intrinsics), `bridge.image_rate` / `image_quality` (5 Hz / JPEG 70
+for the Go2 park and floor2 profiles), and `simulation.window_width/height`
+(1280x720 for the GUI viewport). Measured on the park scene: about 3.7 Hz cloud,
+0.46x wall-clock simulation speed, and the P1-P3 mission completed in ~180 s.
+Raise these values when visual quality matters more than throughput.
+
 ## Checks
 
 With Python, NumPy, Torch, PyYAML and msgpack available, from the project root:

@@ -85,6 +85,23 @@ MAX_WAIT=1800 ./start.sh
 
 后续启动约 30-60 秒。
 
+## ONS2 导航集成
+
+仿真器通过 `sim_bridge`（ROS1）与 `sim_bridge_ros2`（ROS2）可直接运行 ONS2 导航栈，
+话题与 TF 契约和真机一致。**使用文档唯一来源**在 ONS2 仓库：
+[04 · Simulation](../Odin-Nav-Stack2/docs/simulation/04_simulation.zh-CN.md)。
+
+```bash
+./start.sh --robot go2 --runtime ros2 --stack ons2 --map office_0923_sim
+```
+
+集成资产（地图、航点、冒烟工具）见 [`integrations/ons2/`](integrations/ons2/README.md)，
+话题/TF 契约见 [`docs/simulation-interface.md`](docs/simulation-interface.md)。
+
+ONS2 运行还需要：导航仓库的 Go2 仿真 profile/launch、按教程导出的 USDZ/PGM/航点资产、
+以及本地构建的 `isaac_nav_ros2` 镜像。公共 GitHub 的 ONS2 main 目前尚未包含仿真 profile，
+因此 `start.sh --stack ons2` 不是零配置一键；待该 profile 上游发布后即可按教程直接启动。
+
 ## 机器人类型
 
 | 类型 | 用途 | 特点 |

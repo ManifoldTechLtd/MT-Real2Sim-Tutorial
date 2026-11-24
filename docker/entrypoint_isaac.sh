@@ -13,5 +13,6 @@ export PYTHONPATH=/workspace:${PYTHONPATH}
 cd /workspace
 
 # 执行 Python 脚本
-echo "[container] Executing: /isaac-sim/python.sh r2s2r/run_sim.py --config r2s2r/configs/config.yaml"
-exec /isaac-sim/python.sh r2s2r/run_sim.py --config r2s2r/configs/config.yaml
+CFG="${SIM_CONFIG:-r2s2r/configs/config.yaml}"
+echo "[container] Executing: /isaac-sim/python.sh r2s2r/run_sim.py --config ${CFG}"
+exec /isaac-sim/python.sh r2s2r/run_sim.py --config "${CFG}"

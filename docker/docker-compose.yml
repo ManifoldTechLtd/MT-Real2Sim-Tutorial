@@ -33,7 +33,8 @@ services:
       - XAUTHORITY=/root/.Xauthority
       # 环境变量覆盖（通过start.sh传入）
       - ROBOT_TYPE=${ROBOT_TYPE:-kinematic_car}
-      - SCENE_PATH=${SCENE_PATH:-/dataset/tunnel1.usdz}
+      - SCENE_PATH=${SCENE_PATH:-}
+      - SIM_CONFIG=${SIM_CONFIG:-r2s2r/configs/config.yaml}
       - PHYSX_GPU_DYNAMICS=${PHYSX_GPU_DYNAMICS:-}
       - PHYSX_DEVICE=${PHYSX_DEVICE:-}
       - COLLISION_APPROX=${COLLISION_APPROX:-meshSimplification}
@@ -49,7 +50,7 @@ services:
       # 启动脚本
       - ./entrypoint_isaac.sh:/entrypoint_isaac.sh:ro
       # 场景文件
-      - ${DATASET_DIR:-/home/mt/dzy/tunnel-inspection-v2/dataset}:/dataset:ro
+      - ${DATASET_DIR:-../dataset}:/dataset:ro
       # X11 GUI
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ${HOME}/.Xauthority:/root/.Xauthority:ro
@@ -71,6 +72,42 @@ services:
     # 启动后执行仿真
     entrypoint: ["/bin/bash"]
     command: ["/entrypoint_isaac.sh"]
+
+  ros2:
+    build:
+      context: .
+      dockerfile: Dockerfile.ros2
+    image: isaac_nav_ros2:jazzy
+    container_name: isaac_nav_ros2
+    network_mode: host
+    ipc: host
+    stdin_open: true
+    tty: true
+
+    environment:
+      - DISPLAY=${DISPLAY}
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-77}
+      - XDG_RUNTIME_DIR=/tmp/runtime-root
+      - QT_X11_NO_MITSHM=1
+      - XAUTHORITY=/root/.Xauthority
+
+    volumes:
+      # ONS2 checkout (nav stack) and the sim-side ROS2 bridge workspace
+      - ${ONS2_ROOT:-../Odin-Nav-Stack2}:/ons2
+      - ../ros2_ws/src/sim_bridge_ros2:/ons2/ros2_ws/src/sim_bridge_ros2:ro
+      - ../integrations:/integrations:ro
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${HOME}/.Xauthority:/root/.Xauthority:ro
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    command: ["bash", "-c", "sleep infinity"]
 
   ros1:
     build:

@@ -1,0 +1,47 @@
+## ROS2 Jazzy runtime for ONS2 simulation (no GPU requirement for the runtime itself).
+FROM ros:jazzy-ros-base
+
+# Use an HTTPS/CN mirror; plain http archive.ubuntu.com is blocked on some networks.
+RUN set -eux; \
+    for f in /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list; do \
+        if [ -f "$f" ]; then \
+            sed -i 's|http://archive.ubuntu.com/ubuntu|https://mirrors.aliyun.com/ubuntu|g; s|http://security.ubuntu.com/ubuntu|https://mirrors.aliyun.com/ubuntu|g' "$f"; \
+        fi; \
+    done
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3-pip python3-colcon-common-extensions python3-tk git vim tmux build-essential \
+        ros-jazzy-tf2-ros ros-jazzy-tf2-geometry-msgs \
+        ros-jazzy-pointcloud-to-laserscan ros-jazzy-nav2-map-server \
+        ros-jazzy-visualization-msgs ros-jazzy-rclcpp-action \
+        ros-jazzy-foxglove-bridge \
+        ros-jazzy-ament-cmake-gtest ros-jazzy-ament-cmake-pytest \
+        libeigen3-dev libyaml-cpp-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# NeuPAN inference runs on CPU by default; rebuild with a CUDA torch if needed.
+RUN pip3 install --no-cache-dir --break-system-packages \
+        torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
+
+# Pin numpy to the Debian-provided 1.26.4 (pip cannot uninstall the apt copy).
+RUN pip3 install --no-cache-dir --break-system-packages --ignore-installed \
+        "numpy==1.26.4"
+
+# NeuPAN python dependencies (the package itself is installed from the mounted ONS2 repo).
+# gctl==1.2 pins an old matplotlib sdist; NeuPAN does not import matplotlib, so install
+# gctl without deps and provide numpy/scipy from this image.
+RUN pip3 install --no-cache-dir --break-system-packages --no-deps "ecos==2.0.14"
+RUN pip3 install --no-cache-dir --break-system-packages msgpack
+
+RUN pip3 install --no-cache-dir --break-system-packages \
+        "numpy==1.26.4" "scipy==1.12.0" cvxpylayers rich dill colorama \
+        "scikit-learn==1.5.2" pyyaml loguru
+RUN pip3 install --no-cache-dir --break-system-packages --no-deps "gctl==1.2"
+# gctl imports matplotlib+tkinter at module import time; keep a numpy-1.26-compatible wheel.
+RUN pip3 install --no-cache-dir --break-system-packages "matplotlib==3.9.2"
+
+RUN mkdir -p /ons2_ws/src
+WORKDIR /ons2_ws
+ENV ROS_DOMAIN_ID=77
+
+CMD ["bash"]

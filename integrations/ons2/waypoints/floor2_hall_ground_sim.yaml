@@ -1,0 +1,4 @@
+waypoints:
+  - {name: "G1", x: -4.46, y: -2.05, yaw: -2.50, dwell_sec: 2.0}
+  - {name: "G2", x: -3.31, y: 1.10, yaw: 1.22, dwell_sec: 2.0}
+  - {name: "G3", x: -1.71, y: 2.35, yaw: 0.66, dwell_sec: 2.0}

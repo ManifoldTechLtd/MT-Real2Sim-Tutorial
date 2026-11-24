@@ -25,7 +25,8 @@ PROJECT_DIR="$SCRIPT_DIR"
 COMPOSE_FILE="$PROJECT_DIR/docker/docker-compose.yml"
 ISAAC_CONTAINER="isaac_nav_isaac"
 ROS_CONTAINER="isaac_nav_ros1"
-DATASET_DIR="${DATASET_DIR:-/home/mt/dzy/tunnel-inspection-v2/dataset}"
+DATASET_DIR="${DATASET_DIR:-$PROJECT_DIR/dataset}"
+SIM_CONFIG="${SIM_CONFIG:-}"
 TCP_PORT=9090
 MAX_WAIT="${MAX_WAIT:-600}"
 LOG_DIR="${LOG_DIR:-/tmp/isaac_nav_sim}"
@@ -47,6 +48,11 @@ err()   { echo -e "${RED}[start] ERROR:${NC} $*" >&2; }
 ACTION="start"
 ROBOT_TYPE=""
 SCENE_PATH=""
+RUNTIME=""
+STACK="none"
+MAP_NAME="office_0923_sim"
+ONS2_ROOT="${ONS2_ROOT:-$PROJECT_DIR/../Odin-Nav-Stack2}"
+ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-77}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -56,6 +62,22 @@ while [[ $# -gt 0 ]]; do
             ;;
         --robot)
             ROBOT_TYPE="$2"
+            shift 2
+            ;;
+        --runtime)
+            RUNTIME="$2"
+            shift 2
+            ;;
+        --stack)
+            STACK="$2"
+            shift 2
+            ;;
+        --map)
+            MAP_NAME="$2"
+            shift 2
+            ;;
+        --ons2-root)
+            ONS2_ROOT="$2"
             shift 2
             ;;
         --scene)
@@ -71,7 +93,10 @@ while [[ $# -gt 0 ]]; do
             echo "  --robot <type>    指定机器人类型: kinematic_car | spot | go2"
             echo "                    (默认: kinematic_car, 或使用 config.yaml 中的配置)"
             echo "  --scene <dir>     指定场景文件目录"
-            echo "                    (默认: /home/mt/dzy/tunnel-inspection-v2/dataset)"
+            echo "  --runtime <r>     ros1 | ros2（--stack ons2 时必填）"
+            echo "  --stack <s>       none | ons2（默认 none，保持原有流程）"
+            echo "  --map <name>      ONS2 地图名（默认 office_0923_sim）"
+            echo "  --ons2-root <p>   ONS2 仓库路径（默认 ../Odin-Nav-Stack2）"
             echo "  --stop            停止所有容器"
             echo "  -h, --help        显示此帮助"
             echo ""
@@ -89,6 +114,38 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# ── 校验运行时/栈参数 ──
+if [ "$STACK" != "none" ] && [ "$STACK" != "ons2" ]; then
+    err "无效的 stack: $STACK（支持 none | ons2）"
+    exit 1
+fi
+if [ "$STACK" = "ons2" ] && [ -z "$ROBOT_TYPE" ]; then
+    ROBOT_TYPE=go2
+fi
+if [ -z "$SIM_CONFIG" ]; then
+    if [ "$STACK" = "ons2" ] && [ "$ROBOT_TYPE" = "go2" ]; then
+        SIM_CONFIG="r2s2r/configs/go2_office_0923.yaml"
+    else
+        SIM_CONFIG="r2s2r/configs/config.yaml"
+    fi
+fi
+if [ "$STACK" = "ons2" ]; then
+    if [[ "$RUNTIME" != "ros1" && "$RUNTIME" != "ros2" ]]; then
+        err "--stack ons2 需要 --runtime ros1|ros2"
+        exit 1
+    fi
+    ONS2_ROOT="$(cd "$ONS2_ROOT" 2>/dev/null && pwd)" || {
+        err "ONS2_ROOT 不存在: $ONS2_ROOT"
+        err "先克隆 Odin-Nav-Stack2，或传 --ons2-root <path>"
+        exit 1
+    }
+    MAP_YAML_HOST=""
+    if [ ! -f "$PROJECT_DIR/integrations/ons2/maps/${MAP_NAME}.yaml" ]; then
+        err "缺少地图: $PROJECT_DIR/integrations/ons2/maps/${MAP_NAME}.yaml"
+        exit 1
+    fi
+fi
 
 # ── 停止 ──
 if [ "$ACTION" = "stop" ]; then
@@ -206,11 +263,29 @@ export DATASET_DIR
 export ROBOT_TYPE
 export SCENE_PATH
 export DISPLAY
+export SIM_CONFIG
+export ONS2_ROOT
+export ROS_DOMAIN_ID
+export MAP_NAME
+export RUNTIME
 
-DATASET_DIR="$DATASET_DIR" \
-ROBOT_TYPE="$ROBOT_TYPE" \
-SCENE_PATH="$SCENE_PATH" \
-docker compose -f "$COMPOSE_FILE" up -d
+if [ "$STACK" = "ons2" ] && [ "$RUNTIME" = "ros2" ]; then
+    info "启动容器 (Isaac Sim + ROS2)..."
+    if ! docker images | grep -q "isaac_nav_ros2"; then
+        info "构建 ROS2 镜像 isaac_nav_ros2:jazzy ..."
+        DATASET_DIR="$DATASET_DIR" ROBOT_TYPE="$ROBOT_TYPE" SCENE_PATH="$SCENE_PATH" \
+        SIM_CONFIG="$SIM_CONFIG" ONS2_ROOT="$ONS2_ROOT" \
+            docker compose -f "$COMPOSE_FILE" build ros2 || exit 1
+    fi
+    DATASET_DIR="$DATASET_DIR" ROBOT_TYPE="$ROBOT_TYPE" SCENE_PATH="$SCENE_PATH" \
+    SIM_CONFIG="$SIM_CONFIG" ONS2_ROOT="$ONS2_ROOT" \
+        docker compose -f "$COMPOSE_FILE" up -d --force-recreate isaac-sim ros2
+else
+    info "启动容器 (Isaac Sim + ROS1)..."
+    DATASET_DIR="$DATASET_DIR" ROBOT_TYPE="$ROBOT_TYPE" SCENE_PATH="$SCENE_PATH" \
+    SIM_CONFIG="$SIM_CONFIG" ONS2_ROOT="$ONS2_ROOT" \
+        docker compose -f "$COMPOSE_FILE" up -d --force-recreate isaac-sim ros1
+fi
 
 # ══════════════════════════════════════
 #  等待 Isaac Sim 就绪
@@ -272,7 +347,63 @@ fi
 ok "Isaac Sim 仿真循环正在运行"
 
 # ══════════════════════════════════════
-#  启动 ROS: bridge + RViz + teleop
+#  ONS2 模式 (ROS2)：bridge + 导航栈
+# ══════════════════════════════════════
+if [ "$STACK" = "ons2" ] && [ "$RUNTIME" = "ros2" ]; then
+    if ! docker exec isaac_nav_ros2 test -f /ons2/ros2_ws/install/setup.bash; then
+        err "ONS2 ROS2 工作区尚未编译: /ons2/ros2_ws/install 不存在"
+        err "先在容器内执行 colcon build（见 docs/simulation/04_simulation.md）"
+        exit 1
+    fi
+
+    info "启动 ROS2 sim_bridge ..."
+    docker exec -d isaac_nav_ros2 bash -lc \
+        "source /opt/ros/jazzy/setup.bash && \
+         source /ons2/ros2_ws/install/setup.bash && \
+         ros2 launch sim_bridge_ros2 bridge.launch.py \
+           bridge_config:=/ons2/ros2_ws/src/sim_bridge_ros2/config/go2_sim.yaml \
+           color_lut_path:=/integrations/ons2/color_luts/${MAP_NAME}.npz \
+           >/tmp/bridge.log 2>&1"
+
+    ODOM_WAIT=0
+    while [ "$ODOM_WAIT" -lt 60 ]; do
+        if docker exec isaac_nav_ros2 bash -lc \
+            "source /opt/ros/jazzy/setup.bash && source /ons2/ros2_ws/install/setup.bash && \
+             timeout 3 ros2 topic echo /odin1/odometry --once >/dev/null 2>&1"; then
+            break
+        fi
+        sleep 2
+        ODOM_WAIT=$((ODOM_WAIT + 2))
+    done
+    if [ "$ODOM_WAIT" -ge 60 ]; then
+        err "等待 /odin1/odometry 超时，查看: docker exec isaac_nav_ros2 cat /tmp/bridge.log"
+        exit 1
+    fi
+    ok "sim_bridge 已发布 /odin1/odometry (${ODOM_WAIT}s)"
+
+    info "启动 ONS2 导航栈 (ROS2, map=${MAP_NAME}) ..."
+    docker exec -d isaac_nav_ros2 bash -lc \
+        "bash /ons2/scripts/ons2_sim_ros2.sh \
+           --map /integrations/ons2/maps/${MAP_NAME}.yaml \
+           >/tmp/ons2_sim.log 2>&1"
+
+    echo ""
+    echo "============================================"
+    echo "  ONS2 仿真栈启动中"
+    echo "============================================"
+    echo "  地图: ${MAP_NAME}"
+    echo "  日志: docker exec isaac_nav_ros2 tail -f /tmp/ons2_sim.log"
+    echo "  状态: docker exec isaac_nav_ros2 bash -lc 'source /opt/ros/jazzy/setup.bash && source /ons2/ros2_ws/install/setup.bash && ros2 topic echo /waypoint_manager/status --once'"
+    echo "  航点: bash integrations/ons2/waypoints/send_waypoints.sh --runtime ros2 --scene ${MAP_NAME}"
+    echo "  Ctrl+C 停止全部"
+    echo "============================================"
+    echo ""
+
+    while true; do sleep 5; done
+fi
+
+# ══════════════════════════════════════
+#  ROS: bridge + RViz + teleop
 # ══════════════════════════════════════
 
 info "启动 roscore..."

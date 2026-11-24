@@ -11,6 +11,10 @@ RUN apt-get update && apt-get install -y \
     ros-noetic-sensor-msgs \
     ros-noetic-geometry-msgs \
     ros-noetic-nav-msgs \
+    ros-noetic-pointcloud-to-laserscan \
+    ros-noetic-map-server \
+    ros-noetic-rosbridge-server \
+    ros-noetic-tf2-geometry-msgs \
     git \
     vim \
     && rm -rf /var/lib/apt/lists/*

@@ -1,0 +1,7 @@
+# Return route from the end of office_0923_sim.yaml (P3) back toward the spawn area.
+waypoints:
+  - {name: "R1", x: 0.00, y: 6.40, yaw: -0.60, dwell_sec: 2.0}
+  - {name: "R2", x: 0.90, y: 5.20, yaw: -0.93, dwell_sec: 2.0}
+  - {name: "R3", x: 0.50, y: 3.70, yaw: -1.83, dwell_sec: 2.0}
+  - {name: "R4", x: 0.45, y: 2.20, yaw: -1.60, dwell_sec: 2.0}
+  - {name: "R5", x: -0.05, y: 0.30, yaw: -1.83, dwell_sec: 2.0}
