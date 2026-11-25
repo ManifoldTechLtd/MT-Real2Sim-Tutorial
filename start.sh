@@ -205,9 +205,9 @@ if ! docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi &
 fi
 
 # Isaac Sim 镜像
-if ! docker images | grep -q "isaacsim51-r2s2r"; then
-    err "未找到 Isaac Sim 镜像: isaacsim51-r2s2r:latest"
-    err "请确保已构建或拉取该镜像"
+if ! docker images | grep -qE "r2s2r-isaac|isaacsim51-r2s2r"; then
+    err "未找到 Isaac Sim 镜像: r2s2r-isaac:5.1.0（或 isaacsim51-r2s2r:latest）"
+    err "请按 docs/end-to-end-scan-to-ons2.md 或 docker/Dockerfile.isaac 构建/加载镜像"
     exit 1
 fi
 

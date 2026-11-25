@@ -1,0 +1,6 @@
+numpy
+plyfile
+open3d
+usd-core
+msgpack
+scipy

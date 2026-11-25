@@ -1,0 +1,7 @@
+# Isaac Sim 5.1 runtime used by docker/docker-compose.yml (tag r2s2r-isaac:5.1.0).
+# The repository mounts r2s2r/ into the container; this only adds the Python
+# packages used by run_sim.py (YAML parsing and JPEG image encoding).
+FROM nvcr.io/nvidia/isaac-sim:5.1.0
+
+USER root
+RUN /isaac-sim/python.sh -m pip install --no-cache-dir pyyaml opencv-python-headless

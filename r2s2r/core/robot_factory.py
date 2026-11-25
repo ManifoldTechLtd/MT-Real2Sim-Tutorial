@@ -144,8 +144,15 @@ def build_quadruped_scene(world, config: dict):
         sim_z_offset = (config.get("sensor_suite") or {}).get("sim_z_offset", 0.0)
         camera_render_scale = float(
             (config.get("sensor_suite") or {}).get("camera_render_scale", 1.0))
+        clip_kwargs = {}
+        clip_near = (config.get("sensor_suite") or {}).get("camera_clip_near")
+        clip_far = (config.get("sensor_suite") or {}).get("camera_clip_far")
+        if clip_near is not None:
+            clip_kwargs['camera_clip_near'] = float(clip_near)
+        if clip_far is not None:
+            clip_kwargs['camera_clip_far'] = float(clip_far)
         suite = SensorSuite(calibration_dir, parent_prim, sim_z_offset=sim_z_offset,
-                            camera_render_scale=camera_render_scale)
+                            camera_render_scale=camera_render_scale, **clip_kwargs)
         suite.build(world)
 
     return robot, suite, body_prim_path

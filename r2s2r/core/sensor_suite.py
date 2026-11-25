@@ -134,7 +134,8 @@ class SensorSuite:
     """
 
     def __init__(self, calibration_dir: str, parent_prim_path: str,
-                 sim_z_offset: float = 0.0, camera_render_scale: float = 1.0):
+                 sim_z_offset: float = 0.0, camera_render_scale: float = 1.0,
+                 camera_clip_near: float = 0.05, camera_clip_far: float = 1000.0):
         """
         Args:
             calibration_dir: calibration/ 目录的绝对路径
@@ -142,10 +143,13 @@ class SensorSuite:
             sim_z_offset: (仅旧格式) 仿真中所有传感器统一 z 偏移 (米).
                           新格式不需要此参数, 偏移已包含在 mount_extrinsics 中.
             camera_render_scale: 相机渲染分辨率比例 (1.0=标定分辨率; 0.5=半分辨率).
+            camera_clip_near/far: 相机裁剪距离; 默认 near=0.05 防止近地/机器人被 USD 默认 1m 裁掉.
         """
         self._calibration_dir = calibration_dir
         self._parent_prim_path = parent_prim_path
         self._camera_render_scale = float(camera_render_scale)
+        self._camera_clip_near = camera_clip_near
+        self._camera_clip_far = camera_clip_far
 
         # 读取外参配置
         ext_path = os.path.join(calibration_dir, "extrinsics.yaml")
@@ -441,9 +445,28 @@ class SensorSuite:
         model = intrinsics.get("model", "pinhole")
 
         if model == "fishpoly":
-            return self._create_camera_fishpoly(world, name, cfg)
+            camera = self._create_camera_fishpoly(world, name, cfg)
         else:
-            return self._create_camera_pinhole(world, name, cfg)
+            camera = self._create_camera_pinhole(world, name, cfg)
+        self._apply_camera_clipping(camera, name)
+        return camera
+
+    def _apply_camera_clipping(self, camera, name):
+        try:
+            before = camera.get_clipping_range()
+        except Exception as error:  # noqa: BLE001 - diagnostic for Isaac builds
+            before = ('unavailable', str(error))
+        print(f"    Camera '{name}' clipping before: {before}")
+        if self._camera_clip_near is None and self._camera_clip_far is None:
+            return
+        near = self._camera_clip_near if self._camera_clip_near is not None else before[0]
+        far = self._camera_clip_far if self._camera_clip_far is not None else before[1]
+        camera.set_clipping_range(float(near), float(far))
+        try:
+            after = camera.get_clipping_range()
+        except Exception as error:  # noqa: BLE001
+            after = ('unavailable', str(error))
+        print(f"    Camera '{name}' clipping after: {after}")
 
     def _create_camera_pinhole(self, world, name: str, cfg: dict):
         """创建 Pinhole 相机"""

@@ -61,6 +61,12 @@ for the Go2 park and floor2 profiles), and `simulation.window_width/height`
 0.46x wall-clock simulation speed, and the P1-P3 mission completed in ~180 s.
 Raise these values when visual quality matters more than throughput.
 
+Cameras default to `clippingRange=(0.05, 1000)`; the USD default near plane of
+1 m clipped the near ground/robot and produced a dark band with triangular edges
+at the bottom of low-mounted camera images. Override per scene with
+`sensor_suite.camera_clip_near` / `camera_clip_far`; the before/after values are
+printed at camera creation.
+
 ## Checks
 
 With Python, NumPy, Torch, PyYAML and msgpack available, from the project root:

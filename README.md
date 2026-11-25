@@ -50,7 +50,7 @@ Isaac Sim 5.1 仿真 ↔ ROS1 Noetic 统一导航算法框架。支持三类机�
 - **GPU**：NVIDIA RTX 3070+ (显存 >= 8GB)
 - **驱动**：NVIDIA >= 560
 - **Docker**：docker + docker-compose-v2 + nvidia-container-toolkit
-- **Isaac Sim**：已有 `isaacsim51-r2s2r:latest` Docker 镜像
+- **Isaac Sim**：`r2s2r-isaac:5.1.0` Docker 镜像（可从 `nvcr.io/nvidia/isaac-sim:5.1.0` 构建/重命名，见 `docker/Dockerfile.isaac`）
 
 ### 启动
 
@@ -97,6 +97,8 @@ MAX_WAIT=1800 ./start.sh
 
 集成资产（地图、航点、冒烟工具）见 [`integrations/ons2/`](integrations/ons2/README.md)，
 话题/TF 契约见 [`docs/simulation-interface.md`](docs/simulation-interface.md)。
+从 Q9000 扫图、XAI 导出、USDZ/地图生成到 ONS2 导航的完整流程见
+[`docs/end-to-end-scan-to-ons2.md`](docs/end-to-end-scan-to-ons2.md)。
 
 ONS2 运行还需要：导航仓库的 Go2 仿真 profile/launch、按教程导出的 USDZ/PGM/航点资产、
 以及本地构建的 `isaac_nav_ros2` 镜像。公共 GitHub 的 ONS2 main 目前尚未包含仿真 profile，

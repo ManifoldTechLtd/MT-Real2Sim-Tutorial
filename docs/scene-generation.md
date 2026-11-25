@@ -1,5 +1,9 @@
 # 从 MindCloudX 扫描数据生成 Isaac 仿真场景
 
+完整端到端流程（Q9000 扫图 → XAI → USDZ → 地图 → 仿真 → ONS2 导航）见
+[`end-to-end-scan-to-ons2.md`](end-to-end-scan-to-ons2.md)。转换脚本已随仓库提供在
+[`mt-r2s/mindx2isaacsim/`](mt-r2s/mindx2isaacsim/)。
+
 官方流程（飞书文档 + 公开教程）：
 
 - 飞书：《MindcloudXAI 导入 Isaac Sim 教程》
