@@ -32,8 +32,11 @@ sensor_suite_debug.log
 /tmp/
 *.log
 
-# Dataset (场景文件通常很大，不提交)
-dataset/
+# Dataset (scene files are usually large, not committed; keep only the docs)
+dataset/*
+!dataset/README.md
+!dataset/README.zh-CN.md
+!dataset/.gitkeep
 *.usdz
 
 # Cache
@@ -43,8 +46,7 @@ dataset/
 # Local simulator diagnostic captures
 hang_logs/
 
-# local scenes (not redistributable)
-dataset/
+# local scenes are not redistributable; the dataset/ rules above keep the docs tracked
 
 # scene-specific LiDAR color LUTs (generated)
 integrations/ons2/color_luts/*.npz

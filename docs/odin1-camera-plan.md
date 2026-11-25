@@ -8,7 +8,7 @@
 
 **技术：**Isaac Sim 5.1、USD、RTX/NuRec、NumPy、OpenEXR、ROS1/ROS2、OpenCV remap。
 
-**评审依据：**用户要求保留当前颜色 LUT、后续再实施鱼眼；模型参考为文末飞书文档。本文不声称目前已经复刻真实 Odin1。
+**评审依据：**用户要求保留当前颜色 LUT、后续再实施鱼眼；模型参考为文末公开教程。本文不声称目前已经复刻真实 Odin1。
 
 ## 1. 约束与执行顺序
 
@@ -153,7 +153,7 @@
 
 - [ ] 向机械/硬件团队索取对应版本的 STP/STEP：外壳、镜头/雷达窗口、安装孔和Go2支架。
 - [ ] 同时取得 CAD 基准到相机光心、雷达测量原点、IMU 原点的变换，以及质量/质心/惯量。
-- [ ] 明确开源再分发授权；不能因有内部 CAD 文件就把模型上传 GitHub。
+- [ ] 明确开源再分发授权；不能因为手上有 CAD 文件就把模型上传 GitHub。
 - [ ] 转为 USD：视觉网格用于外观和自遮挡，简化碰撞体用于 PhysX；传感器安装在标定测量原点而非外壳中心。
 - [ ] 验证安装间隙、相机视场、雷达自遮挡与自滤规则。STP 不能代替镜头标定或雷达反射/固件模型。
 
@@ -168,7 +168,7 @@
 
 ## 7. 参考
 
-- Odin1/Q9000 鱼眼模型：https://vvcazjv268.feishu.cn/wiki/Mx2OwzGdZiOYQUkbVW2cEbp8nAg
+- Odin1/Q9000 鱼眼模型参考：https://github.com/ManifoldTechLtd/MT-Real2Sim-Tutorial/tree/master/docs/mt-r2s
 - NVIDIA 镜头映射：https://docs.omniverse.nvidia.com/materials-and-rendering/latest/cameras.html
 - 本仓库：`r2s2r/core/sensor_suite.py`、`r2s2r/core/fishpoly_lut.py`、`r2s2r/core/observation.py`、`r2s2r/core/scene_builder.py`、`r2s2r/core/robot_factory.py`、`r2s2r/bridge/protocol.py`、ROS bridge。
 

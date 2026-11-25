@@ -4,10 +4,8 @@
 [`end-to-end-scan-to-ons2.md`](end-to-end-scan-to-ons2.md)。转换脚本已随仓库提供在
 [`mt-r2s/mindx2isaacsim/`](mt-r2s/mindx2isaacsim/)。
 
-官方流程（飞书文档 + 公开教程）：
+官方流程（公开教程）：
 
-- 飞书：《MindcloudXAI 导入 Isaac Sim 教程》
-  https://vvcazjv268.feishu.cn/wiki/RIQLw4Cq0i7rcxkY3wbcHo5fntd
 - 公开教程与源码：
   https://github.com/ManifoldTechLtd/MT-Real2Sim-Tutorial/tree/master/docs/mt-r2s
 
@@ -68,7 +66,7 @@ scene:
 
 - 单层/室外：默认局部地面法（逐格最低点作为地面）。
 - 多层室内：`--fixed-floor <z>` + `--free-min/--free-max`（地面高度带）+
-  `--min-height/--max-height`（墙体/高障碍带）。示例（公司二楼）：
+  `--min-height/--max-height`（墙体/高障碍带）。示例（多层室内大堂）：
 
 ```bash
 python tools/build_scan_scene.py --name floor2_hall \
@@ -84,7 +82,7 @@ python tools/build_scan_scene.py --name floor2_hall \
 
 | 场景 | USDZ | 地图 | 楼面 |
 |---|---|---|---|
-| 公司二楼大厅 | `dataset/floor2_hall_3dgs.usdz` | `integrations/ons2/maps/floor2_hall_sim.*` | z≈1.67m |
+| 多层室内大堂 | `dataset/floor2_hall_3dgs.usdz` | `integrations/ons2/maps/floor2_hall_sim.*` | z≈1.67m |
 
 注意：该扫描包含多层/大挑空，二层家具较多；多航点任务在局部地图与点云/碰撞不一致时
 可能出现 `START_OCCUPIED`/`NeuPAN feedback stalled`，需要按具体区域清理/裁剪地图。

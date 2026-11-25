@@ -19,13 +19,13 @@ The full topic / TF contract is in [`../../docs/simulation-interface.md`](../../
 
 ## Map provenance
 
-`office_0923_v3partial.pgm` comes from the internal v3 door-test map: it is mostly
+`office_0923_v3partial.pgm` is a partial scanned-map derivative used to build the demo map: it is mostly
 `unknown` (205). ONS2's planner treats non-free cells as blocked and relocates goals
 that lack clearance, so the demo map fills `unknown` with `free` while keeping walls
 (0) and doors (128) blocked. Goals closer than ~0.55 m to a blocked cell are relocated
 by the planner; pick waypoints with ≥1.1 m clearance (validated with `/map_planner/plan`).
 
-Scenes (`.usdz`), customer maps and Odin `.bin` relocation maps are **not** part of this
+Scenes (`.usdz`), site maps and Odin `.bin` relocation maps are **not** part of this
 repository. Point `DATASET_DIR` at a directory that contains `office_0923.usdz`.
 
 ## Verified flow (ROS 2, November 2026)

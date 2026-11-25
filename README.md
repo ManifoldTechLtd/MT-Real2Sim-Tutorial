@@ -1,225 +1,227 @@
+English | [简体中文](README.zh-CN.md)
+
 # Isaac Navigation Sim
 
-Isaac Sim 5.1 仿真 ↔ ROS1 Noetic 统一导航算法框架。支持三类机器人，用于导航算法的仿真测试和实机部署验证。
+An Isaac Sim 5.1 simulation ↔ ROS1 Noetic unified navigation algorithm framework. It supports three robot types for simulation testing and real-robot deployment validation of navigation algorithms.
 
-## 特性
+## Features
 
-- **三类机器人支持**：kinematic_car（运动学履带车）、Spot、Go2
-- **一键启动**：`./start.sh` 自动启动 Isaac Sim + ROS1 双容器
-- **零代码切换**：通过命令行参数或配置文件切换机器人类型
-- **仿真到实机**：仿真与实机使用相同的 ROS1 接口，导航算法零修改部署
+- **Three robot types**: kinematic_car (kinematic tracked vehicle), Spot, Go2
+- **One-command launch**: `./start.sh` starts the Isaac Sim + ROS1 dual-container stack automatically
+- **Zero-code switching**: switch robot types via command-line flags or configuration files
+- **Simulation to real robot**: simulation and real robot use the same ROS1 interface, so navigation algorithms deploy without modification
 
-## 系统架构
+## System architecture
 
 ```
-┌──────────────── Docker 容器环境 ──────────────────┐
+┌──────────────── Docker containers ─────────────────┐
 │                                                    │
-│  Isaac Sim 容器                                    │
+│ Isaac Sim container                                │
 │  ┌────────────────────────────────────┐            │
 │  │ Robot (kinematic_car/Spot/Go2)     │            │
 │  │ SensorSuite (LiDAR + Camera + IMU) │            │
-│  │ TcpBridgeServer ───────────────────────┐        │
-│  │   send: pose + pointcloud + image     │        │
-│  │   recv: cmd_vel                       │        │
-│  └────────────────────────────────────┘  │        │
-│                                           │        │
-│              TCP localhost:9090            │        │
-│                                           │        │
-│  ROS1 Noetic 容器                          │        │
-│  ┌─────────────────────────────────────┐  │        │
-│  │  sim_bridge    → /state_estimation  │◄─┘        │
-│  │                → /registered_scan   │           │
-│  │                → /camera/image      │           │
-│  │                → TF: map → sensor   │           │
-│  │                ← /cmd_vel           │           │
-│  │                                     │           │
-│  │  nav_algo      导航算法 (C++)       │           │
-│  │  nav_demo      演示/测试 (Python)   │           │
-│  │  RViz          可视化               │           │
-│  └─────────────────────────────────────┘           │
+│  │ TcpBridgeServer ──────────────────────┐         │
+│  │   send: pose + pointcloud + image  │  │         │
+│  │   recv: cmd_vel                    │  │         │
+│  └────────────────────────────────────┘  │         │
+│                                          │         │
+│                  TCP localhost:9090                │
+│                                          │         │
+│ ROS1 Noetic container                              │
+│  ┌────────────────────────────────────┐  │         │
+│  │  sim_bridge    → /state_estimation │◄─┘         │
+│  │                → /registered_scan  │            │
+│  │                → /camera/image     │            │
+│  │                → TF: map → sensor  │            │
+│  │                ← /cmd_vel          │            │
+│  │                                    │            │
+│  │  nav_algo      navigation (C++)    │            │
+│  │  nav_demo      demo/tests (Python) │            │
+│  │  RViz          visualization       │            │
+│  └────────────────────────────────────┘            │
 └────────────────────────────────────────────────────┘
 
-实机部署: odin_driver 替换 sim_bridge, nav_algo 零修改
+Real robot: odin_driver replaces sim_bridge; nav_algo unchanged
 ```
 
-## 快速开始
+## Quick start
 
-### 依赖
+### Dependencies
 
-- **系统**：Ubuntu 22.04 / 24.04
-- **GPU**：NVIDIA RTX 3070+ (显存 >= 8GB)
-- **驱动**：NVIDIA >= 560
-- **Docker**：docker + docker-compose-v2 + nvidia-container-toolkit
-- **Isaac Sim**：`r2s2r-isaac:5.1.0` Docker 镜像（可从 `nvcr.io/nvidia/isaac-sim:5.1.0` 构建/重命名，见 `docker/Dockerfile.isaac`）
+- **OS**: Ubuntu 22.04 / 24.04
+- **GPU**: NVIDIA RTX 3070+ (>= 8 GB VRAM)
+- **Driver**: NVIDIA >= 560
+- **Docker**: docker + docker-compose-v2 + nvidia-container-toolkit
+- **Isaac Sim**: `r2s2r-isaac:5.1.0` Docker image (can be built/renamed from `nvcr.io/nvidia/isaac-sim:5.1.0`, see `docker/Dockerfile.isaac`)
 
-### 启动
+### Launch
 
 ```bash
-# 1. 默认启动（kinematic_car）
+# 1. Default launch (kinematic_car)
 ./start.sh
 
-# 2. 启动 Spot 机器人
+# 2. Launch the Spot robot
 ./start.sh --robot spot
 
-# 3. 启动 Go2 机器人
+# 3. Launch the Go2 robot
 ./start.sh --robot go2
 
-# 4. 指定场景目录
+# 4. Specify the scene directory
 ./start.sh --scene /path/to/dataset
 
-# 5. 停止
+# 5. Stop
 ./start.sh --stop
 ```
 
-### 首次启动
+### First launch
 
-首次启动需要：
-1. 拉取 ROS Docker 镜像（约 2GB）
-2. 编译 ROS 工作空间（约 1-2 分钟）
-3. Isaac Sim 编译 shader（首次约 5-10 分钟）
+The first launch requires:
+1. Pulling the ROS Docker image (about 2 GB)
+2. Building the ROS workspace (about 1-2 minutes)
+3. Isaac Sim compiling shaders (about 5-10 minutes the first time)
 
-建议首次使用大超时：
+Using a large timeout for the first run is recommended:
 ```bash
 MAX_WAIT=1800 ./start.sh
 ```
 
-后续启动约 30-60 秒。
+Subsequent launches take about 30-60 seconds.
 
-## ONS2 导航集成
+## ONS2 navigation integration
 
-仿真器通过 `sim_bridge`（ROS1）与 `sim_bridge_ros2`（ROS2）可直接运行 ONS2 导航栈，
-话题与 TF 契约和真机一致。**使用文档唯一来源**在 ONS2 仓库：
-[04 · Simulation](../Odin-Nav-Stack2/docs/simulation/04_simulation.zh-CN.md)。
+The simulator can run the ONS2 navigation stack directly through `sim_bridge` (ROS1) and `sim_bridge_ros2` (ROS2);
+topics and TF contracts are identical to the real robot. **The single source of truth for usage documentation** is in the ONS2 repository:
+[04 · Simulation](../Odin-Nav-Stack2/docs/simulation/04_simulation.zh-CN.md).
 
 ```bash
 ./start.sh --robot go2 --runtime ros2 --stack ons2 --map office_0923_sim
 ```
 
-集成资产（地图、航点、冒烟工具）见 [`integrations/ons2/`](integrations/ons2/README.md)，
-话题/TF 契约见 [`docs/simulation-interface.md`](docs/simulation-interface.md)。
-从 Q9000 扫图、XAI 导出、USDZ/地图生成到 ONS2 导航的完整流程见
-[`docs/end-to-end-scan-to-ons2.md`](docs/end-to-end-scan-to-ons2.md)。
+Integration assets (maps, waypoints, smoke tooling) are in [`integrations/ons2/`](integrations/ons2/README.md);
+topic/TF contracts are in [`docs/simulation-interface.md`](docs/simulation-interface.md).
+The full flow from Q9000 scanning and the XAI export through USDZ/map generation to ONS2 navigation is described in
+[`docs/end-to-end-scan-to-ons2.md`](docs/end-to-end-scan-to-ons2.md).
 
-ONS2 运行还需要：导航仓库的 Go2 仿真 profile/launch、按教程导出的 USDZ/PGM/航点资产、
-以及本地构建的 `isaac_nav_ros2` 镜像。公共 GitHub 的 ONS2 main 目前尚未包含仿真 profile，
-因此 `start.sh --stack ons2` 不是零配置一键；待该 profile 上游发布后即可按教程直接启动。
+ONS2 also requires: the Go2 simulation profile/launch from the navigation repository, the USDZ/PGM/waypoint assets exported per the tutorial,
+and a locally built `isaac_nav_ros2` image. The public GitHub ONS2 main branch does not yet include the simulation profile,
+so `start.sh --stack ons2` is not a zero-configuration one-click launch; once the profile is published upstream, you can launch directly following the tutorial.
 
-## 机器人类型
+## Robot types
 
-| 类型 | 用途 | 特点 |
-|------|------|------|
-| **kinematic_car** | 导航算法验证 | 纯运动学模型，无物理仿真，快速迭代 |
-| **spot** | Boston Dynamics Spot | RL 步态策略，物理仿真 |
-| **go2** | Unitree Go2 | RL 步态策略，物理仿真 |
+| Type | Purpose | Characteristics |
+|------|---------|-----------------|
+| **kinematic_car** | Navigation algorithm validation | Pure kinematic model, no physics simulation, fast iteration |
+| **spot** | Boston Dynamics Spot | RL gait policy, physics simulation |
+| **go2** | Unitree Go2 | RL gait policy, physics simulation |
 
-**推荐**：导航算法开发优先使用 `kinematic_car`，调试完成后再迁移到 `spot` 或 `go2`。
+**Recommendation**: for navigation algorithm development, prefer `kinematic_car`, and migrate to `spot` or `go2` after debugging is complete.
 
-## ROS1 接口
+## ROS1 interface
 
-| Topic | 消息类型 | 说明 |
-|-------|---------|------|
-| `/state_estimation` | `nav_msgs/Odometry` | 机器人位姿+速度 (frame: map) |
-| `/registered_scan` | `sensor_msgs/PointCloud2` | 世界坐标系 LiDAR 点云 |
-| `/camera/image` | `sensor_msgs/Image` | 相机图像 (JPEG 压缩) |
-| TF: `map → base_link → sensor` | `tf/tfMessage` | 坐标变换 |
-| `/cmd_vel` | `geometry_msgs/Twist` | 速度指令 (linear.x/y + angular.z) |
+| Topic | Message type | Description |
+|-------|--------------|-------------|
+| `/state_estimation` | `nav_msgs/Odometry` | Robot pose + velocity (frame: map) |
+| `/registered_scan` | `sensor_msgs/PointCloud2` | LiDAR point cloud in the world frame |
+| `/camera/image` | `sensor_msgs/Image` | Camera image (JPEG compressed) |
+| TF: `map → base_link → sensor` | `tf/tfMessage` | Coordinate transforms |
+| `/cmd_vel` | `geometry_msgs/Twist` | Velocity command (linear.x/y + angular.z) |
 
-## 项目结构
+## Project structure
 
 ```
 isaac_navigation_sim/
-├── r2s2r/                       # Isaac Sim 仿真核心
-│   ├── core/                    #   机器人、传感器、场景
-│   │   ├── kinematic_vehicle.py #     运动学车辆
-│   │   ├── robot_factory.py     #     机器人工厂
-│   │   ├── sensor_suite.py      #     传感器套件
+├── r2s2r/                       # Isaac Sim simulation core
+│   ├── core/                    #   robots, sensors, scene
+│   │   ├── kinematic_vehicle.py #     kinematic vehicle
+│   │   ├── robot_factory.py     #     robot factory
+│   │   ├── sensor_suite.py      #     sensor suite
 │   │   └── ...
-│   ├── bridge/                  #   TCP 桥接 (无 ROS 依赖)
-│   ├── configs/                 #   配置 + 标定
-│   └── run_sim.py               #   主入口
+│   ├── bridge/                  #   TCP bridge (no ROS dependency)
+│   ├── configs/                 #   configurations + calibration
+│   └── run_sim.py               #   main entry point
 │
-├── ros1_ws/src/                 # ROS1 工作空间
-│   ├── sim_bridge/              #   TCP↔ROS1 桥接
-│   ├── nav_algo/                #   导航算法 (C++)
-│   ├── nav_demo/                #   演示/测试 (Python)
-│   └── odin_interfaces/         #   真机接口占位
+├── ros1_ws/src/                 # ROS1 workspace
+│   ├── sim_bridge/              #   TCP↔ROS1 bridge
+│   ├── nav_algo/                #   navigation algorithms (C++)
+│   ├── nav_demo/                #   demo/tests (Python)
+│   └── odin_interfaces/         #   real-robot interface placeholder
 │
-├── docker/                      # Docker 配置
-│   ├── docker-compose.yml       #   双容器编排
-│   └── Dockerfile.ros1          #   ROS1 镜像
+├── docker/                      # Docker configuration
+│   ├── docker-compose.yml       #   dual-container orchestration
+│   └── Dockerfile.ros1          #   ROS1 image
 │
-├── tools/                       # 工具脚本
-└── start.sh                     # 一键启动脚本
+├── tools/                       # utility scripts
+└── start.sh                     # one-command launch script
 ```
 
-## 配置文件
+## Configuration files
 
-主配置文件：`r2s2r/configs/config.yaml`
+Main configuration file: `r2s2r/configs/config.yaml`
 
 ```yaml
-# 机器人类型（也可通过 start.sh --robot 覆盖）
+# Robot type (can also be overridden by start.sh --robot)
 quadruped:
   robot_type: "kinematic_car"  # kinematic_car | spot | go2
 
-# 场景
+# Scene
 scene:
   environment:
     usdz_path: "/dataset/tunnel1.usdz"
 
-# 传感器标定（自动根据 robot_type 适配）
+# Sensor calibration (adapted automatically according to robot_type)
 sensor_suite:
   calibration_dir: "calibration/kinematic_car"  # or pinhole, odin1
 ```
 
-## 实机部署
+## Real-robot deployment
 
-仿真中验证的导航算法可直接部署到实机：
+Navigation algorithms validated in simulation can be deployed directly to the real robot:
 
 ```bash
-# 实机上（Ubuntu 20.04 + ROS Noetic）
-roslaunch odin_interfaces driver.launch  # 替换 sim_bridge
-roslaunch nav_algo navigation.launch     # 相同的导航算法
+# On the real robot (Ubuntu 20.04 + ROS Noetic)
+roslaunch odin_interfaces driver.launch  # replaces sim_bridge
+roslaunch nav_algo navigation.launch     # the same navigation algorithms
 ```
 
-ROS 接口完全兼容，无需修改代码。
+The ROS interface is fully compatible; no code changes are needed.
 
-## 故障排查
+## Troubleshooting
 
-### 容器启动失败
+### Container launch failure
 
 ```bash
-# 检查 Docker
+# Check Docker
 docker info
 groups | grep docker
 
-# 检查 GPU
+# Check the GPU
 nvidia-smi
 docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi
 
-# 检查镜像
+# Check the images
 docker images | grep isaac
 ```
 
-### Isaac Sim 启动超时
+### Isaac Sim startup timeout
 
-首次启动需要编译 shader（5-10 分钟）：
+The first launch needs to compile shaders (5-10 minutes):
 ```bash
 MAX_WAIT=1800 ./start.sh
 ```
 
-查看 Isaac Sim 日志：
+View the Isaac Sim logs:
 ```bash
 docker logs isaac_nav_isaac
 ```
 
-### ROS topics 无数据
+### No data on ROS topics
 
-检查 bridge 日志：
+Check the bridge log:
 ```bash
 docker exec isaac_nav_ros1 cat /tmp/bridge.log
 ```
 
-手动测试 bridge：
+Test the bridge manually:
 ```bash
 docker exec -it isaac_nav_ros1 bash
 source /catkin_ws/devel/setup.bash
@@ -227,33 +229,33 @@ rostopic list
 rostopic hz /registered_scan
 ```
 
-## 开发
+## Development
 
-### 添加新的导航算法
+### Adding a new navigation algorithm
 
-1. 在 `ros1_ws/src/` 创建新的 ROS 包
-2. 订阅 `/state_estimation` 和 `/registered_scan`
-3. 发布 `/cmd_vel`
-4. 在仿真中测试
+1. Create a new ROS package under `ros1_ws/src/`
+2. Subscribe to `/state_estimation` and `/registered_scan`
+3. Publish `/cmd_vel`
+4. Test in simulation
 
-### 修改传感器配置
+### Modifying sensor configuration
 
-编辑 `r2s2r/configs/calibration/<robot_type>/` 下的标定文件。
+Edit the calibration files under `r2s2r/configs/calibration/<robot_type>/`.
 
-### 调试
+### Debugging
 
 ```bash
-# 进入 Isaac Sim 容器
+# Enter the Isaac Sim container
 docker exec -it isaac_nav_isaac bash
 
-# 进入 ROS 容器
+# Enter the ROS container
 docker exec -it isaac_nav_ros1 bash
 source /catkin_ws/devel/setup.bash
 ```
 
-## 许可
+## License
 
-基于 tunnel-inspection-v2 和 MT-Real2Sim-Tutorial 融合。
+Based on a fusion of tunnel-inspection-v2 and MT-Real2Sim-Tutorial.
 
 
 ## Simulation updates

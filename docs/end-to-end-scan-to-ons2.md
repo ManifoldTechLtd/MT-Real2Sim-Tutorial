@@ -1,46 +1,48 @@
-# 从 Q9000 扫图到 Isaac Sim 仿真导航
+English | [简体中文](end-to-end-scan-to-ons2.zh-CN.md)
 
-本教程用你自己扫描的场地制作 Isaac Sim 场景，并让 Go2 在场景中运行 ONS2 导航。
-每一步都会说明 **输入** 和 **输出**，可以按顺序执行。
+# From Q9000 Scanning to Isaac Sim Navigation
 
-适用版本：Isaac Sim 5.1、ROS 2 Jazzy、ONS2、Go2 + ODIN1。
+This tutorial builds an Isaac Sim scene from a site you scanned yourself and runs ONS2 navigation with Go2 in that scene.
+Every step states its **input** and **output**, so you can execute them in order.
 
-开始前先说明：场景文件和地图文件比较大，请放在自己的本地目录中。
-本教程会用到 `MT-Real2Sim-Tutorial`（仿真）和 `Odin-Nav-Stack2`（导航）两个代码仓库。
-所使用的 ONS2 版本必须包含 Go2 仿真配置；如果缺少，请先获取带仿真支持的版本。
+Applies to: Isaac Sim 5.1, ROS 2 Jazzy, ONS2, Go2 + ODIN1.
 
-## 0. 总览
+Before starting: scene and map files are large, so keep them in your own local directory.
+This tutorial uses two repositories: `MT-Real2Sim-Tutorial` (simulation) and `Odin-Nav-Stack2` (navigation).
+The ONS2 version you use must include the Go2 simulation configuration; if it does not, obtain a version with simulation support first.
+
+## 0. Overview
 
 ```text
-Q9000 扫描
-  → 导出扫描工程
-  → MindCloudX AI 训练
-      ├─ cloud.pcd            → 导航地图 PGM/YAML
+Q9000 scan
+  → export scan project
+  → MindCloudX AI training
+      ├─ cloud.pcd            → navigation map PGM/YAML
       ├─ 3dgs.ply + mesh.ply  → scene.usdz
-      └─ map.bin              → 仅真机重定位使用
-  → 配置场景和出生点
-  → 启动 Isaac Sim + ONS2
-  → 选航点，机器人导航
+      └─ map.bin              → only for relocalization on the real robot
+  → configure scene and spawn point
+  → launch Isaac Sim + ONS2
+  → pick waypoints, robot navigates
 ```
 
-| 文件 | 用途 |
+| File | Purpose |
 |---|---|
-| `cloud.pcd` | 生成二维导航地图；可选生成颜色表 |
-| `3dgs.ply` | 生成场景的画面（高斯视觉） |
-| `mesh.ply` | 生成碰撞几何（地面、墙体） |
-| `scene.usdz` | 放到 Isaac 场景中的最终文件 |
-| `my_scene_sim.pgm/.yaml` | 导航使用的二维地图 |
-| `my_scene_meta.json` | 楼层高度、建议出生点 |
-| `my_scene_sim.npz` | 可选的点云回退颜色表 |
-| `map.bin` | 真机 Odin 重定位地图，仿真不需要 |
+| `cloud.pcd` | Generate the 2D navigation map; optionally generate a color LUT |
+| `3dgs.ply` | Generate the scene visuals (Gaussian splatting) |
+| `mesh.ply` | Generate collision geometry (floor, walls) |
+| `scene.usdz` | Final file placed into the Isaac scene |
+| `my_scene_sim.pgm/.yaml` | 2D map used by navigation |
+| `my_scene_meta.json` | Floor height, suggested spawn point |
+| `my_scene_sim.npz` | Optional point-cloud fallback color LUT |
+| `map.bin` | Odin relocalization map for the real robot; not needed for simulation |
 
-下文用 `my_scene` 表示场景名，用 `my_scene_sim` 表示导航地图名。
+Below, `my_scene` denotes the scene name and `my_scene_sim` the navigation map name.
 
-## 1. 准备目录和终端
+## 1. Prepare directories and terminals
 
-**输入：** 已安装 Docker 的开发电脑、两个代码仓库。
+**Input:** a development computer with Docker installed, and both repositories.
 
-打开终端，按自己的实际路径修改并执行：
+Open a terminal, adjust the commands to your actual paths, and run:
 
 ```bash
 export SIM_ROOT=/path/to/MT-Real2Sim-Tutorial
@@ -54,52 +56,51 @@ mkdir -p "$SCENE_ROOT/ply" "$SCENE_ROOT/mesh" "$SCENE_ROOT/out" "$DATASET_DIR"
 cd "$SIM_ROOT"
 ```
 
-后续命令默认都在这个终端执行。`DATASET_DIR` 是 Isaac 读取场景文件的目录。
+The following commands are assumed to run in this terminal. `DATASET_DIR` is the directory from which Isaac reads scene files.
 
-**输出：** 准备好两个仓库路径和场景工作目录。
+**Output:** both repository paths and the scene working directory are ready.
 
-## 2. 用 Q9000 扫描场地
+## 2. Scan the site with Q9000
 
-**输入：** Q9000、Go2、手机、MindCloud Go。
+**Input:** Q9000, phone, MindCloud Go.
 
-1. 手机安装 **MindCloud Go**。
-2. 将 Q9000 固定到 Go2 上，检查支架、线缆和供电。
-3. Q9000 开机，手机连接 Q9000 的 WiFi。名称通常包含设备序列号后四位，密码以设备说明为准。
-4. 打开 App，点击 **连接设备**，等待连接成功。
-5. 点击 **开始扫描**，再点绿色播放键，输入项目名 `my_scene`。
-6. 遥控 Go2 缓慢走遍需要导航的区域。走道、门口和转角尽量多走一遍，最后回到已扫描区域。
-7. 点击停止，确认项目已保存。
-8. 用 USB 3.0 连接 Q9000 数据口和电脑，或使用设备的导出功能，把本次扫描工程完整复制到电脑。
+1. Install **MindCloud Go** on the phone.
+2. Check that the Q9000 cables and power supply are working properly.
+3. Power on the Q9000 and connect the phone to the Q9000 Wi-Fi. The network name usually contains the last four digits of the device serial number; use the password given in the device instructions.
+4. Open the app, tap **Connect device**, and wait for the connection to succeed.
+5. Tap **Start scan**, then the green play button, and enter the project name `my_scene`.
+6. Hold the Q9000 and walk slowly through the area to be navigated. Walk through corridors, doorways, and corners several times, scan feature-rich areas, and finally return to an already scanned area (for scanning technique you can ask a Manifold Tech after-sales FAE).
+7. Tap stop and confirm that the project has been saved.
+8. Connect the Q9000 data port to the computer with a USB 3.0 cable, or use the device export function, and copy the entire scan project to the computer.
 
-扫描时不要走得太快，避免拖影和漏扫；玻璃、镜面和反光地面容易产生错误点，后续要检查地图。
+Do not walk too fast while scanning; avoid motion blur and missed areas. Glass, mirrors, and reflective floors easily produce incorrect points, so check the map afterwards.
 
-**输出：** 电脑上的完整扫描工程文件夹。
+**Output:** the complete scan project folder on the computer.
 
-## 3. 在 MindCloudX AI 训练并下载
+## 3. Train in MindCloudX AI and download
 
-**输入：** 第 2 步得到的完整扫描工程。
+**Input:** the complete scan project from step 2.
 
-1. 打开 https://mindcloudx.ai/，登录或注册。
-2. 点击 **上传数据集**，选择本次扫描工程文件夹并上传。
-   建议先把工程复制到电脑硬盘再上传，避免 U 盘或设备断连。
-3. 上传完成后进入同名项目。我们需要 **点云、3DGS、Mesh**：
-   在对应页签分别创建训练任务。
-4. 训练参数保持默认，按需开启“动态物体滤除”，等待完成并预览结果。
-5. 下载文件：
+1. Open https://mindcloudx.ai/ and log in or register.
+2. Click **Upload dataset**, select the scan project folder, and upload it.
+   Copying the project to the computer's local disk before uploading is recommended, to avoid disconnection of the USB drive or device.
+3. After the upload completes, open the project with the same name. We need the **point cloud, 3DGS, and Mesh**:
+   create a training task on each corresponding tab.
+4. Keep the training parameters at their defaults, enable "dynamic object removal" if needed, wait for completion, and preview the results.
+5. Download the files:
 
 ```text
 my_scene/
 ├── cloud.pcd
 ├── ply/
-│   └── 3dgs.ply      # 下载 Z-up 版本
+│   └── 3dgs.ply      # download the Z-up version
 └── mesh/
     └── mesh.ply
 ```
 
-6. 如果还要在**真机**上运行导航，另外下载同项目的 `map.bin`；只做仿真时不需要。
+6. If you also want to run navigation on a **real robot**, additionally download `map.bin` from the same project; it is not needed for simulation only.
 
-确认三个文件来自同一项目；3DGS 和 Mesh 都使用 Z-up 和米制单位。
-文件名不同时可以重命名，并按下面的位置放好：
+Confirm that the three files come from the same project; if the file names differ, rename them and place them in the following locations:
 
 ```bash
 cp /path/to/cloud.pcd "$SCENE_ROOT/cloud.pcd"
@@ -107,14 +108,14 @@ cp /path/to/3dgs.ply  "$SCENE_ROOT/ply/3dgs.ply"
 cp /path/to/mesh.ply  "$SCENE_ROOT/mesh/mesh.ply"
 ```
 
-**输出：** `cloud.pcd`、`ply/3dgs.ply`、`mesh/mesh.ply`，以及可选的 `map.bin`。
+**Output:** `cloud.pcd`, `ply/3dgs.ply`, `mesh/mesh.ply`, and optionally `map.bin`.
 
-## 4. 把 3DGS 和 Mesh 转成 USDZ
+## 4. Convert 3DGS and Mesh to USDZ
 
-**输入：** `ply/3dgs.ply`、`mesh/mesh.ply`。
-如果已经有可用的 USDZ，可以跳过本步，直接执行第 5 步生成地图。
+**Input:** `ply/3dgs.ply`, `mesh/mesh.ply`.
+If you already have a usable USDZ, you can skip this section and go directly to step 5 to generate the map.
 
-转换脚本在 `docs/mt-r2s/mindx2isaacsim/`。先安装依赖：
+The conversion scripts are in `docs/mt-r2s/mindx2isaacsim/`. Install the dependencies first:
 
 ```bash
 cd "$SIM_ROOT"
@@ -124,9 +125,9 @@ pip install -r docs/mt-r2s/mindx2isaacsim/requirements.txt
 pip install pyyaml python-lzf
 ```
 
-需要使用 Python 3.10–3.12。若系统提示缺少 `venv`，先安装对应的 `python3-venv` 软件包。
+Python 3.10–3.12 is required. If the system reports that `venv` is missing, install the matching `python3-venv` package first.
 
-执行转换：
+Run the conversion:
 
 ```bash
 python docs/mt-r2s/mindx2isaacsim/export_usdz.py \
@@ -139,30 +140,30 @@ python docs/mt-r2s/mindx2isaacsim/export_usdz.py \
 cp "$SCENE_ROOT/usdz/scene.usdz" "$DATASET_DIR/my_scene.usdz"
 ```
 
-参数说明：
+Parameter reference:
 
-| 参数 | 含义 | 使用建议 |
+| Parameter | Meaning | Recommendation |
 |---|---|---|
-| `--ply_dir` | 3DGS PLY 所在目录 | 放 `3dgs.ply` |
-| `--mesh_dir` | Mesh PLY 所在目录 | 放 `mesh.ply` |
-| `-o` | USDZ 输出目录 | 生成 `scene.usdz` |
-| `--simplify_faces` | 碰撞网格抽稀到多少面 | 默认 50 万；过少可能漏碰撞，过多可能导入失败 |
-| `--max_dist` | 丢弃离原点多远的高斯 | 默认 200 m；`0` 表示不过滤 |
-| `--mesh_visible` | 碰撞网格是否可见 | 默认不可见，只用于物理和雷达 |
+| `--ply_dir` | Directory containing the 3DGS PLY | Put `3dgs.ply` there |
+| `--mesh_dir` | Directory containing the Mesh PLY | Put `mesh.ply` there |
+| `-o` | USDZ output directory | Produces `scene.usdz` |
+| `--simplify_faces` | Target face count for the decimated collision mesh | Default 500k; too few may miss collisions, too many may fail to import |
+| `--max_dist` | Discard Gaussians farther than this distance from the origin | Default 200 m; `0` means no filtering |
+| `--mesh_visible` | Whether the collision mesh is visible | Invisible by default; used only for physics and LiDAR |
 
-碰撞网格默认使用 `collision_approx=none`，不要修改。
-Z-up 数据不要加 `--y_up`，该选项只用于旧版 Y-up 数据。
+The collision mesh uses `collision_approx=none` by default; do not change it.
+Do not add `--y_up` for Z-up data; that option is only for legacy Y-up data.
 
-**输出：** `$DATASET_DIR/my_scene.usdz`。
-这个文件负责画面和碰撞；导出成功不代表碰撞正确，启动后仍需检查机器人不会穿地或穿墙。
+**Output:** `$DATASET_DIR/my_scene.usdz`.
+This file provides both visuals and collision; a successful export does not mean correct collision, so after startup you still need to check that the robot does not fall through the floor or walk through walls.
 
-## 5. 生成导航地图（重点）
+## 5. Generate the navigation map (key step)
 
-**输入：** 同一场地的 `cloud.pcd`、`mesh.ply`。
+**Input:** `cloud.pcd` and `mesh.ply` from the same site.
 
-导航需要 PGM/YAML 二维地图，不能直接用 USDZ。这里使用项目自带的地图工具。
-如果第 4 步已经生成 USDZ，一定要加 `--skip-usdz`，否则工具会再生成一个只带网格的 USDZ。
-如果跳过了第 4 步，请先按第 4 步安装依赖并执行 `source "$SIM_ROOT/.venv-scene/bin/activate"`。
+ONS2 navigation needs a 2D PGM/YAML map and cannot use the USDZ directly. Use the map tool bundled with the project here.
+If step 4 already produced the USDZ, you must add `--skip-usdz`; otherwise the tool generates another USDZ that contains only the mesh.
+If you skipped step 4, first install the dependencies from step 4 and run `source "$SIM_ROOT/.venv-scene/bin/activate"`.
 
 ```bash
 cd "$SIM_ROOT"
@@ -180,111 +181,110 @@ cp "$SCENE_ROOT/out/my_scene_sim.pgm" \
    "$SCENE_ROOT/out/my_scene_sim.yaml" integrations/ons2/maps/
 ```
 
-### 5.1 参数含义
+### 5.1 Parameter reference
 
-| 参数 | 含义 |
+| Parameter | Meaning |
 |---|---|
-| `--name` | 场景名。`--name my_scene` 会输出 `my_scene_sim.pgm/.yaml` 和 `my_scene_meta.json` |
-| `--mesh` | Mesh 文件。命令必须提供；加 `--skip-usdz` 时不会重做 USDZ，但仍需传入以满足命令格式 |
-| `--pcd` | 扫描点云，用于生成地图 |
-| `--out-dir` | 输出目录 |
-| `--skip-usdz` | 只生成地图；已有 USDZ 时使用 |
-| `--resolution` | 每格多少米。`0.05` 表示 5 cm；地图很大时可改 `0.1` |
-| `--fixed-floor` | 指定要导航的楼层在原始点云中的 Z 高度；不填时取低处约 2% 的点作为地面 |
-| `--min-height` / `--max-height` | 相对楼面的障碍物高度范围，默认 `0.30 / 0.90` 米 |
-| `--free-min` / `--free-max` | 相对楼面的可通行高度范围，默认 `-0.30 / 3.00` 米 |
-| `--color-voxel`、`--color-stride`、`--color-max-points` | 只在自动生成网格 USDZ 时使用，`--skip-usdz` 时不需要 |
+| `--name` | Scene name. `--name my_scene` outputs `my_scene_sim.pgm/.yaml` and `my_scene_meta.json` |
+| `--mesh` | Mesh file. Must be provided on the command line; with `--skip-usdz` the USDZ is not rebuilt, but the argument is still required to satisfy the command format |
+| `--pcd` | Scan point cloud, used to generate the map |
+| `--out-dir` | Output directory |
+| `--skip-usdz` | Generate the map only; use when a USDZ already exists |
+| `--resolution` | Meters per cell. `0.05` means 5 cm; use `0.1` for very large maps |
+| `--fixed-floor` | Z height in the original point cloud of the floor to navigate; when omitted, the lowest ~2% of points are taken as the ground |
+| `--min-height` / `--max-height` | Obstacle height range relative to the floor, defaults `0.30 / 0.90` m |
+| `--free-min` / `--free-max` | Traversable height range relative to the floor, defaults `-0.30 / 3.00` m |
+| `--color-voxel`, `--color-stride`, `--color-max-points` | Used only when the mesh USDZ is generated automatically; not needed with `--skip-usdz` |
 
-**`--fixed-floor` 怎么定：**
-单层场地先用默认值生成地图，打开 PGM 检查；如果地面判断正确，就不需要这个参数。
-多层或挑空场地，先看 `my_scene_meta.json` 里的 `floor_z`，或者用点云查看工具找到
-准备让机器人行驶的楼面高度，再把这个 Z 值填给 `--fixed-floor`。
-其余 `--min-height/--max-height` 和 `--free-min/--free-max` 都相对于这个楼面，
-按现场障碍物和楼板厚度调整；不要把其他楼层投到当前楼层。
+**How to determine `--fixed-floor`:**
+For a single-floor site, first generate the map with the defaults and open the PGM to check; if the ground is detected correctly, this parameter is not needed.
+For multi-floor or atrium sites, first look at `floor_z` in `my_scene_meta.json`, or use a point-cloud viewer to find the height of the floor the robot will drive on, then pass that Z value to `--fixed-floor`.
+The other options `--min-height/--max-height` and `--free-min/--free-max` are all relative to this floor;
+adjust them according to on-site obstacles and the slab thickness. Do not project other floors onto the current floor.
 
-### 5.2 工具输出
+### 5.2 Tool output
 
-以 `--name my_scene` 为例：
+Using `--name my_scene` as an example:
 
-- `my_scene_sim.pgm`：白=可通行，黑=障碍，灰=未知；
-- `my_scene_sim.yaml`：地图分辨率和原点；
-- `my_scene_meta.json`：`floor_z`、`scene_position_z`、`spawn_xy` 等。
+- `my_scene_sim.pgm`: white = traversable, black = obstacle, gray = unknown;
+- `my_scene_sim.yaml`: map resolution and origin;
+- `my_scene_meta.json`: `floor_z`, `scene_position_z`, `spawn_xy`, etc.
 
-地图和 USDZ 使用同一套 X/Y 坐标。若场景在 X/Y 方向平移，地图、出生点、航点必须一起平移，
-不能只移动 USDZ。
+The map and the USDZ share the same X/Y coordinate frame. If the scene is shifted along X/Y, the map, spawn point, and waypoints must be shifted together;
+do not move only the USDZ.
 
-### 5.3 默认地面、楼层高度和出生点
+### 5.3 Default ground, floor height, and spawn point
 
-这是一个容易出错的点，先分清三个高度：
+This is an error-prone point; first distinguish three heights:
 
-1. **默认地面**：Isaac 中一块水平的兜底地面，位置是世界的 `z=0` 加上
-   `scene.ground_z_offset`（扫描场景常用 `-0.02`）。它不是扫描出来的楼面高度。
-2. **场景楼层**：扫描点云中的楼面。地图工具会给出 `floor_z` 和建议的
-   `scene_position_z`，其中 `scene_position_z = -floor_z`。
-3. **机器人出生高度**：机器人初始位置。它不是楼面高度，而是楼面上方的**下落高度**。
+1. **Default ground**: a flat fallback ground in Isaac, positioned at world `z=0` plus
+   `scene.ground_z_offset` (scanned scenes commonly use `-0.02`). It is not the floor height captured by the scan.
+2. **Scene floor**: the floor in the scanned point cloud. The map tool reports `floor_z` and a suggested
+   `scene_position_z`, where `scene_position_z = -floor_z`.
+3. **Robot spawn height**: the robot's initial position. It is not the floor height but the **drop height** above the floor.
 
-正确做法：
+Correct approach:
 
 ```text
-把 scene.environment.position.z 设为 scene_position_z
-    → 扫描楼面落到 z=0
-把 quadruped.position 的 X/Y 设为 spawn_xy
-    → 机器人站在地图空白区域
-把 quadruped.position.z 设为 0.5 左右
-    → 机器人从楼面上方落下一点，运控能站住
+Set scene.environment.position.z to scene_position_z
+    → the scanned floor lands at z=0
+Set the X/Y of quadruped.position to spawn_xy
+    → the robot stands in a blank area of the map
+Set quadruped.position.z to about 0.5
+    → the robot drops a little above the floor so locomotion can settle
 ```
 
-举例：如果 meta 的 `floor_z` 是 `2.00`，就设 `scene_position_z=-2.00`，
-场景配置的 `position.z` 填 `-2.00`，出生 `position.z` 仍填 `0.5`。
-如果 `floor_z` 是 `-0.50`，就填 `+0.50`。关键是让扫描楼面到 `z=0`，
-不是让出生高度去抵消楼层高度。
+For example: if `floor_z` in the meta is `2.00`, set `scene_position_z=-2.00`,
+put `-2.00` in the scene configuration's `position.z`, and keep the spawn `position.z` at `0.5`.
+If `floor_z` is `-0.50`, enter `+0.50`. The key is to make the scanned floor land at `z=0`,
+not to cancel out the floor height with the spawn height.
 
-配置示例：
+Configuration example:
 
 ```yaml
 scene:
   environment:
-    position: [0.0, 0.0, 0.0]       # 改成 meta 的 scene_position_z
-  use_default_ground: true         # 扫描网格有缺口时兜底
+    position: [0.0, 0.0, 0.0]       # set to scene_position_z from the meta
+  use_default_ground: true         # fallback when the scanned mesh has gaps
   ground_z_offset: -0.02
   physics:
     collision_approximation: none
 
 quadruped:
-  position: [0.0, 0.0, 0.5]        # X/Y 改成 meta 的 spawn_xy；Z 是下落高度
+  position: [0.0, 0.0, 0.5]        # set X/Y to spawn_xy; Z is the drop height
 ```
 
-- **出生点不要用很高**：0.4–0.6 m 通常足够让 Go2 落下并站住；
-  从 1 m 以上落下可能弹跳、翻倒或损坏。
-- **不要出生在地板里面**：如果 Z 比楼面还低，机器人可能被弹开或穿模。
-- **不要靠拖动 USDZ 猜楼层**：在 GUI 里拖动只适合粗略查看，精确位置请改
-  `scene.environment.position` 的数字。拖动后地图和航点不会自动跟着变。
-- **没有 `my_scene_meta.json` 怎么办**：用点云查看工具或地图工具找到楼面 Z；
-  在 Isaac 里也可以放一个临时方块/标记到楼面，读取它的 Z 值。
-  不要用机器人的出生高度反推楼面高度。
-- **如何验证**：启动后等机器人稳定，读取 `/odin1/odometry` 或
-  `/state_estimation` 的 z。机器人应稳定在楼面上方约 0.3–0.5 m；
-  如果 z 持续下降，说明碰撞地面缺失或出生在空洞；
-  如果一开始就穿地或弹飞，检查 `scene_position_z` 和出生 Z。
-- **默认地面什么时候用**：扫描网格没有完整地面、局部有洞时，`use_default_ground: true`
-  会在 `ground_z_offset` 放一块水平兜底地面。多层、坡道或大范围场景建议关闭它，
-  改用 USDZ 的碰撞网格，避免兜底地面把真实低处/高处挡住。
+- **Do not spawn very high**: 0.4–0.6 m is usually enough for Go2 to drop and stand;
+  dropping from above 1 m may bounce, tip over, or damage the robot.
+- **Do not spawn inside the floor**: if Z is lower than the floor, the robot may be ejected or clip through.
+- **Do not guess the floor by dragging the USDZ**: dragging in the GUI is only for rough viewing; for precise placement change the
+  numbers in `scene.environment.position`. Dragging does not move the map and waypoints automatically.
+- **What if there is no `my_scene_meta.json`**: use a point-cloud viewer or the map tool to find the floor Z;
+  in Isaac you can also place a temporary cube/marker on the floor and read its Z value.
+  Do not infer the floor height from the robot's spawn height.
+- **How to verify**: after launch, wait for the robot to stabilize and read the z of `/odin1/odometry` or
+  `/state_estimation`. The robot should stabilize about 0.3–0.5 m above the floor;
+  if z keeps decreasing, the collision ground is missing or the spawn is over a hole;
+  if it falls through or is ejected immediately, check `scene_position_z` and the spawn Z.
+- **When to use the default ground**: when the scanned mesh lacks a complete floor and has local holes, `use_default_ground: true`
+  places a flat fallback ground at `ground_z_offset`. For multi-floor, ramp, or large-area scenes, disable it
+  and use the USDZ collision mesh instead, so the fallback ground does not hide real lower or higher areas.
 
-**输出：** `integrations/ons2/maps/my_scene_sim.pgm` 和 `.yaml`，
-以及 `my_scene_meta.json` 中的楼层/出生点信息。
+**Output:** `integrations/ons2/maps/my_scene_sim.pgm` and `.yaml`,
+plus the floor/spawn information in `my_scene_meta.json`.
 
-## 6. 配置 Isaac 场景
+## 6. Configure the Isaac scene
 
-**输入：** `my_scene.usdz`、`my_scene_sim.pgm/.yaml`、`my_scene_meta.json`。
+**Input:** `my_scene.usdz`, `my_scene_sim.pgm/.yaml`, `my_scene_meta.json`.
 
-复制通用 Go2 配置作为模板：
+Copy the generic Go2 configuration as a template:
 
 ```bash
 cd "$SIM_ROOT"
 cp r2s2r/configs/go2.yaml r2s2r/configs/go2_my_scene.yaml
 ```
 
-打开 `go2_my_scene.yaml`，修改以下字段；其他字段先保持模板值：
+Open `go2_my_scene.yaml` and change the following fields; leave the other fields at their template values for now:
 
 ```yaml
 simulation:
@@ -295,8 +295,8 @@ simulation:
 scene:
   environment:
     enabled: true
-    usdz_path: "/dataset/my_scene.usdz"   # 容器内路径，不是电脑上的绝对路径
-    position: [0.0, 0.0, 0.0]            # 改成 meta 的 scene_position_z
+    usdz_path: "/dataset/my_scene.usdz"   # path inside the container, not an absolute path on your computer
+    position: [0.0, 0.0, 0.0]             # set to scene_position_z from the meta
     add_collision: true
     keep_invisible_collision_meshes: true
   use_default_ground: true
@@ -307,7 +307,7 @@ scene:
 quadruped:
   robot_type: go2
   prim_path: /World/Quadruped
-  position: [0.0, 0.0, 0.5]               # X/Y 改成 spawn_xy；Z 是下落高度
+  position: [0.0, 0.0, 0.5]               # set X/Y to spawn_xy; Z is the drop height
 
 sensor_suite:
   enabled: true
@@ -320,23 +320,24 @@ bridge:
   image_quality: 70
 ```
 
-注意：
+Notes:
 
-- `/dataset/my_scene.usdz` 是容器内路径，对应电脑上的 `DATASET_DIR/my_scene.usdz`；
-- `scene_position_z` 来自 `my_scene_meta.json`，不是出生 Z；
-- 出生 X/Y 用 `spawn_xy`，并确认在地图白色区域内、离障碍物至少约 1 m；
-- 出生 Z 用 0.5 左右，让机器人落下站住；
-- 如果场景没有完整地面，保留 `use_default_ground: true` 和 `ground_z_offset: -0.02`；
-- 机器人站立高度、相机频率和分辨率可以按机器性能和画质需要调整。
+- `/dataset/my_scene.usdz` is the path inside the container, corresponding to `DATASET_DIR/my_scene.usdz` on your computer;
+- `scene_position_z` comes from `my_scene_meta.json`; it is not the spawn Z;
+- use `spawn_xy` for the spawn X/Y, and make sure it is inside the white area of the map and at least about 1 m away from obstacles;
+- use about 0.5 for the spawn Z so the robot drops and stands;
+- if the scene has no complete floor, keep `use_default_ground: true` and `ground_z_offset: -0.02`;
+- robot standing height, camera rate, and resolution can be adjusted for machine performance and visual quality needs.
 
-**输出：** `r2s2r/configs/go2_my_scene.yaml`。
+**Output:** `r2s2r/configs/go2_my_scene.yaml`.
 
-## 7. 生成点云颜色表（可选）
+Note: later we will add the ASTRALL sw01 model and the Unitree As2 with its locomotion controller for simulation training. The repository also provides a simple box-shaped differential-drive car model for validating differential-drive algorithms.
 
-**输入：** 带颜色的 `cloud.pcd`、第 6 步 `scene.environment.position` 的 X/Y/Z 平移量。
+## 7. Generate the point cloud color LUT (optional)
 
-相机只能给视野内的点实时着色。颜色表是静态回退颜色，不是导航必需文件，
-也不是相机镜头标定表。
+**Input:** a colored `cloud.pcd`, and the X/Y/Z translation of `scene.environment.position` from step 6.
+
+Optional; enabling it gives a better color appearance.
 
 ```bash
 cd "$SIM_ROOT"
@@ -349,18 +350,18 @@ python tools/build_color_lut.py \
   --translation 0 0 0.0
 ```
 
-`--translation` 必须和第 6 步 `scene.environment.position` 的 X/Y/Z 完全一致。
-示例里的 `0 0 0.0` 只是占位；Z 用 meta 的 `scene_position_z`，X/Y 也平移过就填对应的 X/Y。
-文件名要和地图名 `my_scene_sim` 一致。
-不生成这个文件也可以运行，只是相机没有覆盖的点会使用默认颜色。
+`--translation` must exactly match the X/Y/Z of `scene.environment.position` in step 6.
+The `0 0 0.0` in the example is only a placeholder; use `scene_position_z` from the meta for Z, and fill in the matching X/Y if you translated X/Y as well.
+The file name must match the map name `my_scene_sim`.
+Running without this file also works; points not covered by the camera then use the default color.
 
-**输出：** `integrations/ons2/color_luts/my_scene_sim.npz`。
+**Output:** `integrations/ons2/color_luts/my_scene_sim.npz`.
 
-## 8. 构建运行环境并编译导航
+## 8. Build the runtime environment and compile navigation
 
-**输入：** 两个代码仓库、Docker、NVIDIA GPU、场景配置。
+**Input:** both repositories, Docker, an NVIDIA GPU, and the scene configuration.
 
-构建镜像：
+Build the images:
 
 ```bash
 cd "$SIM_ROOT"
@@ -368,9 +369,9 @@ docker build -f docker/Dockerfile.isaac -t r2s2r-isaac:5.1.0 .
 docker compose -f docker/docker-compose.yml build ros2
 ```
 
-如果拉取 Isaac 基础镜像需要登录，请按 NVIDIA NGC 的说明登录终端；不要把账号或令牌写进仓库。
+If pulling the Isaac base image requires a login, sign in to the terminal as described by NVIDIA NGC; do not write accounts or tokens into the repository.
 
-启动 ROS2 容器并编译导航工作区：
+Start the ROS 2 container and compile the navigation workspace:
 
 ```bash
 cd "$SIM_ROOT"
@@ -385,11 +386,11 @@ docker exec isaac_nav_ros2 bash -lc '
     ons2_bringup sim_bridge_ros2'
 ```
 
-**输出：** 两个镜像和导航工作区编译结果；编译报错时先处理，不要继续启动。
+**Output:** both images and the compiled navigation workspace; if compilation reports errors, fix them first and do not continue to launch.
 
-## 9. 启动仿真、选择航点并验收
+## 9. Launch the simulation, select waypoints, and verify
 
-**输入：** 第 6 步的场景配置、第 5 步的地图、第 8 步的编译结果。
+**Input:** the scene configuration from step 6, the map from step 5, and the build result from step 8.
 
 ```bash
 cd "$SIM_ROOT"
@@ -400,23 +401,23 @@ DATASET_DIR="$DATASET_DIR" \
   --ons2-root "$ONS2_ROOT"
 ```
 
-等待 Isaac 窗口加载场景。如果窗口处于暂停状态，点击 **PLAY**。
-启动完成后，导航控制台在容器 tmux 中：
+Wait for the Isaac window to load the scene. If the window is paused, click **PLAY**.
+After launch, the navigation console lives in tmux inside the container:
 
 ```bash
 docker exec -it isaac_nav_ros2 tmux attach -t ons2_sim
 ```
 
-### 选航点
+### Selecting waypoints
 
-在 Foxglove 连接本机 8765 端口，打开 3D 面板：
+Connect Foxglove to port 8765 on the local machine and open the 3D panel:
 
-1. 显示地图 `/map` 和点云 `/odin1/cloud_slam`；
-2. 使用 Pose 工具在地图白色区域选点；
-3. 发布话题设为 **`/waypoint_pick`**，坐标系设为 **`map`**；
-4. 在控制台创建单点或多点任务并启动。
+1. Visualize the map `/map`, the point cloud `/odin1/cloud_slam`, the image `/odin1/image/compressed`, and any other topics you need;
+2. Set the publish topic to **`/waypoint_pick`** and the frame to **`map`** (consistent with ONS2);
+3. Use the Pose tool to pick points in the white area of the map;
+4. Create a single-point or multi-point mission in the console and start it.
 
-也可以使用预设航点。新建 `integrations/ons2/waypoints/my_scene_sim.yaml`：
+You can also use preset waypoints. Create `integrations/ons2/waypoints/my_scene_sim.yaml`:
 
 ```yaml
 waypoints:
@@ -424,25 +425,22 @@ waypoints:
   - {name: P2, x: 2.0, y: 1.0, yaw: 1.57, dwell_sec: 2.0}
 ```
 
-坐标只是格式示例，必须换成自己地图中的安全位置；`yaw` 用弧度，`dwell_sec` 是停留秒数。
-发送任务：
+The coordinates are a format example only and must be replaced with safe positions in your own map; `yaw` is in radians and `dwell_sec` is the dwell time in seconds.
+Send the mission:
 
 ```bash
 bash integrations/ons2/waypoints/send_waypoints.sh \
   --runtime ros2 --scene my_scene_sim
 ```
 
-### 点云颜色
+### Point cloud color
 
-展开 `/odin1/cloud_slam` 设置：
+Expand the `/odin1/cloud_slam` settings:
 
-- 颜色模式选 **BGR（打包）**；
-- 颜色字段选 **`rgb`**，不要保留“距离（自动）”。
+- choose **BGR (packed)** as the color mode;
+- choose **`rgb`** as the color field; do not leave it on "distance (automatic)".
 
-图像话题是 `/odin1/image/compressed`。当前仿真相机使用针孔模型，
-不是 Odin 真机的鱼眼镜头；二者仍有差异。
-
-### 验收
+### Verification
 
 ```bash
 docker exec -it isaac_nav_ros2 bash
@@ -451,70 +449,55 @@ source /ons2/ros2_ws/install/setup.bash
 ros2 topic echo /waypoint_manager/status --once
 ```
 
-应能看到任务从 `NAVIGATING`、`DWELLING` 到 `COMPLETED`。
-图像、点云和地图应持续更新；仿真变慢时，实际频率可能低于配置值。
+The mission should progress from `NAVIGATING` through `DWELLING` to `COMPLETED`.
+Images, point cloud, and map should keep updating; when the simulation slows down, actual rates may be below the configured values.
 
-停止：
+Stop:
 
 ```bash
 cd "$SIM_ROOT"
 ./start.sh --stop
 ```
 
-**输出：** 机器人沿航点移动，任务完成。
+**Output:** the robot moves along the waypoints and the mission completes.
 
-## 10. 真机导航和仿真的区别
+## 10. Differences between real-robot navigation and simulation
 
-本教程以仿真为主。如果还要用同一扫描数据在真机上导航，需要额外准备：
+This tutorial focuses on simulation. If you also want to navigate on a real robot with the same scan data, additional preparation is needed:
 
-| | 仿真 | 真机 |
+| | Simulation | Real robot |
 |---|---|---|
-| 场景 | USDZ | 真实场地 |
-| 定位 | 仿真位姿 | Odin 定位 |
-| 二维地图 | PGM/YAML | PGM/YAML |
-| 重定位地图 `.bin` | 不需要 | 按 Odin 驱动要求配置 |
-| 控制 | 仿真 `/cmd_vel` | 真实底盘 |
+| Scene | USDZ | Real site |
+| Localization | Simulated pose | Odin localization |
+| 2D map | PGM/YAML | PGM/YAML |
+| Relocalization map `.bin` | Not needed | Configured per the Odin driver requirements |
+| Control | Simulated `/cmd_vel` | Real chassis |
 
-真机转换 PCD 到 PGM/YAML 时，使用导航仓库中的 `pcd_to_pgm.py`，
-并按真实安装高度设置雷达高度和切片范围。PCD、PGM、YAML、BIN 需要同名，
-YAML 内的 `image` 字段也要对应。真机出生/定位位置不能直接使用仿真出生点。
+When converting PCD to PGM/YAML for the real robot, use `pcd_to_pgm.py` from the navigation repository,
+and set the LiDAR height and slicing range according to the real mounting height. PCD, PGM, YAML, and BIN must share the same base name,
+and the `image` field in the YAML must match as well. Do not reuse the simulation spawn point as the real-robot spawn/localization position.
 
-## 11. 常见问题
+## 11. FAQ
 
-| 现象 | 检查 |
+| Symptom | Check |
 |---|---|
-| 找不到 `go2_sim` 仿真配置 | 使用的 ONS2 版本是否包含 Go2 仿真支持 |
-| `docker exec` 找不到容器 | 先执行第 8 步启动 ROS2 容器 |
-| 找不到 USDZ | `DATASET_DIR` 是否正确；配置里是否使用容器内 `/dataset/` 路径 |
-| 地图和点云错位 | 是否来自同一项目；场景、地图、出生点的 X/Y 是否一起处理 |
-| 起点不可用、`START_OCCUPIED` | 出生点是否在白色区域，离障碍物是否足够远 |
-| 机器人出生后穿地/弹飞 | 检查 `scene_position_z`、出生 Z 和碰撞地面；不要只调出生高度 |
-| 图像底部黑带/灰白三角 | 相机近裁剪太近；检查 `sensor_suite.camera_clip_near/far` |
-| 点云黑色 | Foxglove 同时选择 BGR（打包）和颜色字段 `rgb` |
-| 雷达看不到墙体 | 碰撞网格是否对 RTX 可见；不要只保留全局不可见的网格 |
-| 机器人穿透地面 | 碰撞网格是否有洞，面数是否合适，地面高度是否对齐 |
-| 仿真很慢 | 降低相机比例、图像频率或 GUI 分辨率；不要用提高速度掩盖卡顿 |
-| TF 过期或位姿跳变 | 导航节点使用仿真时钟，避免和其他 ROS2 系统共用 domain |
+| Cannot find the `go2_sim` simulation configuration | Whether the ONS2 version in use includes Go2 simulation support |
+| `docker exec` cannot find the container | Start the ROS 2 container in step 8 first |
+| USDZ not found | Whether `DATASET_DIR` is correct; whether the configuration uses the in-container `/dataset/` path |
+| Map and point cloud misaligned | Whether they come from the same project; whether the scene, map, and spawn X/Y were handled together |
+| Start point unusable, `START_OCCUPIED` | Whether the spawn point is in the white area and far enough from obstacles |
+| Robot falls through the floor or is ejected after spawning | Check `scene_position_z`, the spawn Z, and the collision ground; do not only adjust the spawn height |
+| Robot penetrates the floor | Whether the collision mesh generated from 3DGS has holes, and whether the face count is appropriate |
+| Simulation is very slow | Lower the camera scale, image rate, or GUI resolution; do not mask stutter by raising speed |
+| TF expired or pose jumps | Navigation nodes use the simulation clock; avoid sharing a domain with other ROS 2 systems |
 
-### 原理速查
 
-- **PhysX**：负责机器人接触、碰撞和运动。
-- **RTX LiDAR**：用光线追踪产生距离点云；不是运行 Odin 固件，也不等于 PhysX 碰撞体。
-- **点云颜色**：把雷达点投影到相机图像取色；视野外用静态颜色表回退。
-  当前没有模拟真机鱼眼、累积上色、反射率和噪声的全部细节。
-- **导航连接**：Isaac 通过 TCP 9090 发送位姿、点云和图像；ROS2 桥接发布
-  `/odin1/*`、`/clock` 和 TF；ONS2 产生 `/cmd_vel`，桥接再转发给 Isaac。
-- **标定**：安装外参在 `r2s2r/configs/calibration/odin1_go2/extrinsics.yaml`；
-  相机/雷达内参在 `calibration/odin1/`。改动传感器安装位置时，导航侧固定 TF 也要同步。
+For integration with ONS2, see the [ONS2 integration directory](../integrations/ons2/README.md).
 
-更多细节见 [场景转换](scene-generation.md)、[仿真接口](simulation-interface.md)、
-[性能与校验](simulation_updates.md)和 [ONS2 集成目录](../integrations/ons2/README.md)。
+## 12. References
 
-## 12. 参考
-
-- USDZ 转换工具：[docs/mt-r2s/mindx2isaacsim/](mt-r2s/mindx2isaacsim/README.md)
-- 官方教程与脚本：
+- Official tutorial and scripts:
   https://github.com/ManifoldTechLtd/MT-Real2Sim-Tutorial/tree/master/docs/mt-r2s
-- ONS2 导航文档：`Odin-Nav-Stack2/docs/simulation/04_simulation.md` / `.zh-CN.md`
+- ONS2 navigation documentation: `Odin-Nav-Stack2/docs/simulation/04_simulation.md` / `.zh-CN.md`
 
-> 请只使用自己有权使用的扫描数据，并遵守场地所有方和数据提供方的授权要求。
+> Use only scan data you are entitled to use, and comply with the authorization requirements of the site owner and data provider.

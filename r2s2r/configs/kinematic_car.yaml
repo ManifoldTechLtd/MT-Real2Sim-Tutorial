@@ -20,7 +20,7 @@ simulation:
 scene:
   environment:
     enabled: true
-    usdz_path: "/home/yu/code_tunnelinspection/tunnel-inspection-v2/dataset/tunnel1.usdz"
+    usdz_path: "/path/to/dataset/tunnel1.usdz"
     position: [0.0, 0.0, 0.0]
     orientation: [0.0, 0.0, 0.0]
     scale: [1.0, 1.0, 1.0]
