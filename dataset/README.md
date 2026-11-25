@@ -78,7 +78,7 @@ Notes:
 
 ## Getting the demo data
 
-See [docs/end-to-end-scan-to-ons2.md](../docs/end-to-end-scan-to-ons2.md) for the complete pipeline that turns
+See [docs/Use the ONS2 and simulator manual.md](../docs/Use%20the%20ONS2%20and%20simulator%20manual.md) for the complete pipeline that turns
 your own Q9000 scan into a USDZ scene, a PGM/YAML map, and ONS2 waypoints. The demo pack simply places an
 already prepared USDZ here so that the first run needs no scanning or conversion work.
 

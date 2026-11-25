@@ -100,11 +100,10 @@ topics and TF contracts are identical to the real robot. **The single source of 
 Integration assets (maps, waypoints, smoke tooling) are in [`integrations/ons2/`](integrations/ons2/README.md);
 topic/TF contracts are in [`docs/simulation-interface.md`](docs/simulation-interface.md).
 The full flow from Q9000 scanning and the XAI export through USDZ/map generation to ONS2 navigation is described in
-[`docs/end-to-end-scan-to-ons2.md`](docs/end-to-end-scan-to-ons2.md).
+[`docs/Use the ONS2 and simulator manual.md`](docs/Use%20the%20ONS2%20and%20simulator%20manual.md).
 
 ONS2 also requires: the Go2 simulation profile/launch from the navigation repository, the USDZ/PGM/waypoint assets exported per the tutorial,
-and a locally built `isaac_nav_ros2` image. The public GitHub ONS2 main branch does not yet include the simulation profile,
-so `start.sh --stack ons2` is not a zero-configuration one-click launch; once the profile is published upstream, you can launch directly following the tutorial.
+and a locally built `isaac_nav_ros2` image. See the navigation repository simulation guide for the profile and startup details.
 
 ## Robot types
 

@@ -1,6 +1,6 @@
 # Go2, lidar and bridge updates
 
-This branch starts from tutorial v2 (951391b). It contains simulation changes
+This document describes the simulation changes
 only: Go2 MoE-CTS + PI, ODIN1 lidar/calibration, synchronized point-cloud
 observations, simulation clock/ROS bridge, TCP/teleop and performance diagnostics.
 The original navigation packages remain unchanged. Local topology/exploration/
@@ -19,9 +19,9 @@ for generating and converting alternate scans. The lidar is 120°×90° with an 
 The Go2 lidar origin is [0.285, 0, 0.12] in base; the other profile uses
 [0.43, 0, 0.10]. Sensor-internal relative calibration is retained.
 
-The kinematic vehicle shape and movement settings remain those of upstream v2.
+The kinematic vehicle shape and movement settings remain those of the simulator baseline.
 Body-return filtering supports both boxes and double cylinders, but changing
-vehicle geometry is outside this branch.
+vehicle geometry is outside this scope.
 
 ## Observation and clock contract
 
@@ -81,7 +81,7 @@ Inside Isaac Sim 5.1 with the repository on PYTHONPATH and an RTX GPU:
 
 See r2s2r/core/assets/go2/README.md for the policy contract and staircase limit.
 
-## Validation of this branch (2026-11-17)
+## Validation (2026-11-17)
 
 - 25 runtime/observation/clock/pose/calibration checks and 3 teleop checks passed.
 - Isaac Sim 5.1: stand, forward, positive and negative yaw each completed an

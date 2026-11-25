@@ -76,7 +76,7 @@ DATASET_DIR=$PWD/dataset ./start.sh --robot go2 --runtime ros2 --stack ons2 \
 ## 获取演示数据
 
 从自己的 Q9000 扫描结果生成 USDZ 场景、PGM/YAML 地图和 ONS2 航点的完整流程见
-[docs/end-to-end-scan-to-ons2.zh-CN.md](../docs/end-to-end-scan-to-ons2.zh-CN.md)。
+[docs/Use the ONS2 and simulator manual.zh-CN.md](../docs/Use%20the%20ONS2%20and%20simulator%20manual.zh-CN.md)。
 演示数据只是把已经准备好的 USDZ 放到这里，让首次运行不需要扫描或转换。
 
 请只使用自己有权使用的扫描数据，并遵守场地所有方和数据提供方的授权要求。

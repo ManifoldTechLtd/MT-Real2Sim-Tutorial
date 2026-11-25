@@ -100,11 +100,10 @@ MAX_WAIT=1800 ./start.sh
 集成资产（地图、航点、冒烟工具）见 [`integrations/ons2/`](integrations/ons2/README.md)，
 话题/TF 契约见 [`docs/simulation-interface.md`](docs/simulation-interface.md)。
 从 Q9000 扫图、XAI 导出、USDZ/地图生成到 ONS2 导航的完整流程见
-[`docs/end-to-end-scan-to-ons2.md`](docs/end-to-end-scan-to-ons2.md)。
+[`docs/Use the ONS2 and simulator manual.md`](docs/Use%20the%20ONS2%20and%20simulator%20manual.md)。
 
 ONS2 运行还需要：导航仓库的 Go2 仿真 profile/launch、按教程导出的 USDZ/PGM/航点资产、
-以及本地构建的 `isaac_nav_ros2` 镜像。公共 GitHub 的 ONS2 main 目前尚未包含仿真 profile，
-因此 `start.sh --stack ons2` 不是零配置一键；待该 profile 上游发布后即可按教程直接启动。
+以及本地构建的 `isaac_nav_ros2` 镜像；profile 与启动细节见导航仓库的仿真指南。
 
 ## 机器人类型
 
