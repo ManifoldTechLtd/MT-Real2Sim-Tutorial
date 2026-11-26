@@ -5,10 +5,21 @@ TCP 客户端 → ROS1 Topics 桥接节点
 
 订阅: /cmd_vel (geometry_msgs/Twist) → TCP CMD_VEL
 发布: /state_estimation (nav_msgs/Odometry)
+      /clock (rosgraph_msgs/Clock, when /use_sim_time is true)
       /registered_scan (sensor_msgs/PointCloud2)
       /camera/image/compressed (sensor_msgs/CompressedImage)
       /imu/data (sensor_msgs/Imu)
-      TF: map → sensor
+      TF 拓扑 (base_link 为中心, 传感器偏移用静态 TF 表达):
+        map → odom (静态, identity)
+        odom → base_link (动态, 来自 POSE 消息, 即机器人 body 位姿)
+        base_link → base_footprint (静态, [0,0,-base_height])
+        base_link → odin1_base_link (静态, 传感器套件安装外参)
+        odin1_base_link → lidar1 (静态, LiDAR 套件内外参)
+        base_link → camera1  (静态, camera_offset_xyz)
+        base_link → imu_link (静态, imu_offset_xyz)
+
+      静态偏移按 tf_profile 从 config/tf_<profile>.yaml 加载,
+      由 bridge.launch 通过 rosparam load 注入. 默认值在下方 ctor 仅作 fallback.
 """
 
 import sys
@@ -17,22 +28,26 @@ import socket
 import time
 import struct
 import threading
+from collections import deque
 import numpy as np
 
 import rospy
-from geometry_msgs.msg import Twist
-from nav_msgs.msg import Odometry
-from sensor_msgs.msg import PointCloud2, PointField, CompressedImage, Imu
+from geometry_msgs.msg import Twist, TransformStamped
 from std_msgs.msg import Empty
+from nav_msgs.msg import Odometry
+from rosgraph_msgs.msg import Clock
+from sensor_msgs.msg import PointCloud2, PointField, CompressedImage, Imu
 import sensor_msgs.point_cloud2 as pc2
 import tf
+import tf2_ros
 
 # 导入协议模块
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 from protocol import (
     encode_cmd_vel, encode_reset, decode_message,
-    MSG_POSE, MSG_POINTCLOUD, MSG_IMAGE, MSG_IMU, HEADER_SIZE,
+    MSG_POSE, MSG_POINTCLOUD, MSG_IMAGE, MSG_IMU, MSG_CLOCK, HEADER_SIZE,
 )
+from frame_math import compose_pose
 
 
 class BridgeNode:
@@ -43,30 +58,140 @@ class BridgeNode:
         self.host = rospy.get_param("~tcp_host", "localhost")
         self.port = rospy.get_param("~tcp_port", 9090)
         self.reconnect_interval = rospy.get_param("~reconnect_interval", 2.0)
+        self.use_sim_time = rospy.get_param("/use_sim_time", False)
+        self._sim_time = None
+
+        # Frame 命名
+        self.map_frame = rospy.get_param("~map_frame", "map")
+        self.odom_frame = rospy.get_param("~odom_frame", "odom")
+        self.base_frame = rospy.get_param("~base_frame", "base_link")
+        self.footprint_frame = rospy.get_param("~footprint_frame", "base_footprint")
+        self.sensor_base_frame = rospy.get_param("~sensor_base_frame", "odin1_base_link")
+        self.lidar_frame = rospy.get_param("~lidar_frame", "lidar1")
+        self.camera_frame = rospy.get_param("~camera_frame", "camera1")
+        self.imu_frame = rospy.get_param("~imu_frame", "imu_link")
+
+        # 静态偏移 (仿真 calibration/pinhole 默认值, 单位 米)
+        # base_link ≡ spot body link, 足底高度参数化 (默认 0.237 = 实测 Spot 站立)
+        self.base_height = rospy.get_param("~base_height", 0.237)
+        self.sensor_base_offset = rospy.get_param("~sensor_base_offset_xyz", [0.0, 0.0, 0.8])
+        self.sensor_base_rotation = rospy.get_param(
+            "~sensor_base_rotation_xyzw", [0.0, 0.0, 0.0, 1.0])
+        self.lidar_offset = rospy.get_param("~lidar_offset_xyz", [0.0, 0.0, 0.0])
+        self.lidar_rotation = rospy.get_param(
+            "~lidar_rotation_xyzw", [0.0, 0.0, 0.0, 1.0])
+        self.camera_offset = rospy.get_param("~camera_offset_xyz", [0.3, 0.0, 0.6])
+        self.camera_rotation = rospy.get_param("~camera_rotation_xyzw", [0.0, 0.0, 0.0, 1.0])
+        self.imu_offset = rospy.get_param("~imu_offset_xyz", [0.0, 0.0, 0.5])
+        self.imu_rotation = rospy.get_param("~imu_rotation_xyzw", [0.0, 0.0, 0.0, 1.0])
+
+        # ONS2 integration: odin mode publishes odom->imu (sensor pose) and lets
+        # the navigation launch own imu->odin1_base_link->base_link.
+        self.frame_layout = rospy.get_param("~frame_layout", "legacy").strip().lower()
+        self.publish_odin1_aliases = rospy.get_param("~publish_odin1_aliases", True)
+        if self.frame_layout not in ("legacy", "odin"):
+            raise ValueError(f"unknown frame_layout: {self.frame_layout}")
 
         # Publishers
+        self.clock_pub = rospy.Publisher("/clock", Clock, queue_size=10) if self.use_sim_time else None
         self.odom_pub = rospy.Publisher("/state_estimation", Odometry, queue_size=10)
         self.pc_pub = rospy.Publisher("/registered_scan", PointCloud2, queue_size=5)
+        self._last_cloud_stamp = 0.0
+        self._odom_tf_stamps = deque(maxlen=256)
         self.img_pub = rospy.Publisher("/camera/image/compressed", CompressedImage, queue_size=5)
         self.imu_pub = rospy.Publisher("/imu/data", Imu, queue_size=50)
-        self.tf_broadcaster = tf.TransformBroadcaster()
 
-        # Subscribers
+        self.odin_odom_pub = None
+        self.odin_cloud_pub = None
+        self.odin_img_pub = None
+        self.odin_imu_pub = None
+        if self.publish_odin1_aliases:
+            self.odin_odom_pub = rospy.Publisher("/odin1/odometry", Odometry, queue_size=10)
+            self.odin_cloud_pub = rospy.Publisher("/odin1/cloud_slam", PointCloud2, queue_size=5)
+            self.odin_img_pub = rospy.Publisher("/odin1/image/compressed", CompressedImage, queue_size=5)
+            self.odin_imu_pub = rospy.Publisher("/odin1/imu", Imu, queue_size=50)
+
+        self.tf_broadcaster = tf.TransformBroadcaster()
+        self.static_tf_broadcaster = tf2_ros.StaticTransformBroadcaster()
+        self._publish_static_tfs()
+
+        # Subscriber
         rospy.Subscriber("/cmd_vel", Twist, self.cmd_vel_callback)
-        rospy.Subscriber("/reset_robot", Empty, self.reset_callback)
+        rospy.Subscriber("/sim_reset", Empty, self.reset_callback)
 
         # TCP 连接状态
         self.sock = None
         self.recv_buffer = bytearray()
         self.connected = False
-        self.last_data_time = 0.0       # timestamp of last received data
-        self.data_timeout = 10.0        # seconds with no data before reconnecting
 
         # cmd_vel 锁
         self.cmd_lock = threading.Lock()
         self.latest_cmd = None
 
-        rospy.loginfo(f"[sim_bridge] Target: {self.host}:{self.port}")
+        # reset 锁
+        self.reset_lock = threading.Lock()
+        self.reset_requested = False
+
+        rospy.loginfo(f"[sim_bridge] Target: {self.host}:{self.port} layout={self.frame_layout}")
+        rospy.loginfo(f"[sim_bridge] TF: {self.map_frame} → {self.odom_frame} → "
+                      f"{self.imu_frame if self.frame_layout == 'odin' else self.base_frame}")
+        rospy.loginfo(f"[sim_bridge] Static: {self.footprint_frame} (z=-{self.base_height}), "
+                      f"{self.sensor_base_frame}={self.sensor_base_offset}, "
+                      f"{self.lidar_frame}={self.lidar_offset}, "
+                      f"{self.camera_frame}={self.camera_offset}, "
+                      f"{self.imu_frame}={self.imu_offset}")
+
+    def _make_static_tf(self, parent, child, xyz, time, rotation=None):
+        t = TransformStamped()
+        t.header.stamp = time
+        t.header.frame_id = parent
+        t.child_frame_id = child
+        t.transform.translation.x = float(xyz[0])
+        t.transform.translation.y = float(xyz[1])
+        t.transform.translation.z = float(xyz[2])
+        q = rotation or [0.0, 0.0, 0.0, 1.0]
+        t.transform.rotation.x = float(q[0])
+        t.transform.rotation.y = float(q[1])
+        t.transform.rotation.z = float(q[2])
+        t.transform.rotation.w = float(q[3])
+        return t
+
+    def _publish_static_tfs(self):
+        """
+        启动时发布所有静态 TF (拓扑在文件头 docstring).
+        odin 布局下传感器边由导航栈 launch 发布, 这里只保留 map→odom。
+        """
+        now = rospy.Time.now()
+        tfs = [
+            # map → odom (仿真无 SLAM 漂移)
+            self._make_static_tf(self.map_frame, self.odom_frame, [0, 0, 0], now),
+            # base_link → base_footprint (足底在地面)
+            self._make_static_tf(self.base_frame, self.footprint_frame,
+                                 [0, 0, -self.base_height], now),
+        ]
+        if self.frame_layout != "odin":
+            tfs.extend([
+                # base_link → odin1_base_link (传感器套件安装外参)
+                self._make_static_tf(self.base_frame, self.sensor_base_frame,
+                                     self.sensor_base_offset, now,
+                                     self.sensor_base_rotation),
+                # odin1_base_link → lidar1 (套件内 LiDAR 外参)
+                self._make_static_tf(self.sensor_base_frame, self.lidar_frame,
+                                     self.lidar_offset, now, self.lidar_rotation),
+                # base_link → camera1
+                self._make_static_tf(self.base_frame, self.camera_frame,
+                                     self.camera_offset, now, self.camera_rotation),
+                # base_link → imu_link
+                self._make_static_tf(self.base_frame, self.imu_frame,
+                                     self.imu_offset, now, self.imu_rotation),
+            ])
+        self.static_tf_broadcaster.sendTransform(tfs)
+
+    def _sensor_pose(self, xyz, quat):
+        """Body pose -> ODIN sensor pose for the odin layout."""
+        return compose_pose(list(xyz), list(quat),
+                            list(self.sensor_base_offset),
+                            list(self.sensor_base_rotation))
 
     def cmd_vel_callback(self, msg):
         """ROS /cmd_vel → 缓存, 由发送线程转发到 TCP"""
@@ -75,19 +200,10 @@ class BridgeNode:
         rospy.loginfo_throttle(2, f"[sim_bridge] /cmd_vel received: vx={msg.linear.x:.2f} vy={msg.linear.y:.2f} wz={msg.angular.z:.2f}")
 
     def reset_callback(self, msg):
-        """ROS /reset_robot → 发送 RESET 消息到 TCP"""
-        if self.connected and self.sock:
-            try:
-                self.sock.setblocking(True)
-                self.sock.sendall(encode_reset())
-                self.sock.setblocking(False)
-                rospy.loginfo("[sim_bridge] RESET sent to Isaac Sim")
-            except (ConnectionResetError, BrokenPipeError, OSError) as e:
-                rospy.logwarn(f"[sim_bridge] Failed to send RESET: {e}")
-                try:
-                    self.sock.setblocking(False)
-                except Exception:
-                    pass
+        """ROS /sim_reset → 触发 Isaac Sim 复位到起点"""
+        with self.reset_lock:
+            self.reset_requested = True
+        rospy.loginfo("[sim_bridge] Reset requested (to_start=True)")
 
     def connect(self):
         """尝试连接 TCP 服务端"""
@@ -99,7 +215,6 @@ class BridgeNode:
             self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             self.connected = True
             self.recv_buffer.clear()
-            self.last_data_time = time.time()
             rospy.loginfo(f"[sim_bridge] Connected to {self.host}:{self.port}")
             return True
         except (socket.error, OSError) as e:
@@ -120,13 +235,11 @@ class BridgeNode:
 
     def run(self):
         """主循环"""
-        rate = rospy.Rate(200)  # 200Hz 轮询
-
         while not rospy.is_shutdown():
             if not self.connected:
                 if not self.connect():
                     rospy.logwarn_throttle(5, "[sim_bridge] Waiting for Isaac Sim TCP server...")
-                    rospy.sleep(self.reconnect_interval)
+                    time.sleep(self.reconnect_interval)
                     continue
 
             # 接收数据
@@ -137,13 +250,8 @@ class BridgeNode:
                     self.disconnect()
                     continue
                 self.recv_buffer.extend(data)
-                self.last_data_time = time.time()
             except BlockingIOError:
-                # No data available — check for data timeout
-                if time.time() - self.last_data_time > self.data_timeout:
-                    rospy.logwarn(f"[sim_bridge] No data for {self.data_timeout}s, reconnecting...")
-                    self.disconnect()
-                    continue
+                pass  # 非阻塞, 无数据
             except (ConnectionResetError, BrokenPipeError, OSError):
                 rospy.logwarn("[sim_bridge] Connection lost")
                 self.disconnect()
@@ -181,10 +289,40 @@ class BridgeNode:
                         pass
                     self.disconnect()
 
-            rate.sleep()
+            # 发送 reset
+            with self.reset_lock:
+                reset_req = self.reset_requested
+                self.reset_requested = False
+            if reset_req and self.connected:
+                try:
+                    self.sock.setblocking(True)
+                    self.sock.sendall(encode_reset(to_start=True))
+                    self.sock.setblocking(False)
+                except (ConnectionResetError, BrokenPipeError, OSError):
+                    try:
+                        self.sock.setblocking(False)
+                    except Exception:
+                        pass
+                    self.disconnect()
+
+            # Receiving /clock must continue when simulation time is paused or zero.
+            time.sleep(0.005)
 
     def handle_message(self, msg_type, payload):
         """处理收到的 TCP 消息"""
+        if msg_type == MSG_CLOCK:
+            stamp = float(payload['ts'])
+            if self.clock_pub is not None and np.isfinite(stamp) and stamp >= 0:
+                if self._sim_time is not None and stamp < self._sim_time:
+                    self._last_cloud_stamp = 0.0
+                self._sim_time = stamp
+                self.clock_pub.publish(Clock(clock=rospy.Time.from_sec(stamp)))
+            return
+        if msg_type not in (MSG_POSE, MSG_POINTCLOUD, MSG_IMAGE, MSG_IMU):
+            return
+        if self.use_sim_time and (self._sim_time is None or payload['ts'] > self._sim_time + 1e-6):
+            rospy.logwarn_throttle(5.0, 'Waiting for matching simulation clock; restart Isaac and bridge together')
+            return
         if msg_type == MSG_POSE:
             self.publish_odometry(payload)
         elif msg_type == MSG_POINTCLOUD:
@@ -195,37 +333,57 @@ class BridgeNode:
             self.publish_imu(payload)
 
     def publish_odometry(self, data):
-        """发布 Odometry + TF"""
+        """发布 Odometry + TF (legacy: odom→base_link, odin: odom→imu)"""
+        stamp = rospy.Time.from_sec(data["ts"])
+        body_xyz = (data["x"], data["y"], data["z"])
+        body_quat = (data["qx"], data["qy"], data["qz"], data["qw"])
+
+        odom = self._make_odometry(stamp, self.base_frame, body_xyz, body_quat, data)
+        self.odom_pub.publish(odom)
+
+        if self.frame_layout == "odin":
+            sensor_xyz, sensor_quat = self._sensor_pose(body_xyz, body_quat)
+            if self.odin_odom_pub is not None:
+                self.odin_odom_pub.publish(
+                    self._make_odometry(stamp, self.imu_frame, sensor_xyz, sensor_quat, data))
+            tf_parent = self.odom_frame
+            tf_child = self.imu_frame
+            tf_xyz, tf_quat = sensor_xyz, sensor_quat
+        else:
+            if self.odin_odom_pub is not None:
+                self.odin_odom_pub.publish(odom)
+            tf_parent = self.odom_frame
+            tf_child = self.base_frame
+            tf_xyz, tf_quat = body_xyz, body_quat
+
+        self.tf_broadcaster.sendTransform(
+            tuple(float(v) for v in tf_xyz),
+            tuple(float(v) for v in tf_quat),
+            stamp,
+            tf_child,
+            tf_parent,
+        )
+        self._odom_tf_stamps.append(stamp)
+
+    def _make_odometry(self, stamp, child_frame, xyz, quat, data):
         odom = Odometry()
-        odom.header.stamp = rospy.Time.from_sec(data["ts"])
-        odom.header.frame_id = "map"
-        odom.child_frame_id = "sensor"
-
-        odom.pose.pose.position.x = data["x"]
-        odom.pose.pose.position.y = data["y"]
-        odom.pose.pose.position.z = data["z"]
-        odom.pose.pose.orientation.x = data["qx"]
-        odom.pose.pose.orientation.y = data["qy"]
-        odom.pose.pose.orientation.z = data["qz"]
-        odom.pose.pose.orientation.w = data["qw"]
-
+        odom.header.stamp = stamp
+        odom.header.frame_id = self.odom_frame
+        odom.child_frame_id = child_frame
+        odom.pose.pose.position.x = float(xyz[0])
+        odom.pose.pose.position.y = float(xyz[1])
+        odom.pose.pose.position.z = float(xyz[2])
+        odom.pose.pose.orientation.x = float(quat[0])
+        odom.pose.pose.orientation.y = float(quat[1])
+        odom.pose.pose.orientation.z = float(quat[2])
+        odom.pose.pose.orientation.w = float(quat[3])
         odom.twist.twist.linear.x = data.get("vx", 0.0)
         odom.twist.twist.linear.y = data.get("vy", 0.0)
         odom.twist.twist.linear.z = data.get("vz", 0.0)
         odom.twist.twist.angular.x = data.get("wx", 0.0)
         odom.twist.twist.angular.y = data.get("wy", 0.0)
         odom.twist.twist.angular.z = data.get("wz", 0.0)
-
-        self.odom_pub.publish(odom)
-
-        # TF: map → sensor
-        self.tf_broadcaster.sendTransform(
-            (data["x"], data["y"], data["z"]),
-            (data["qx"], data["qy"], data["qz"], data["qw"]),
-            odom.header.stamp,
-            "sensor",
-            "map",
-        )
+        return odom
 
     def publish_pointcloud(self, data):
         """发布 PointCloud2"""
@@ -233,9 +391,36 @@ class BridgeNode:
         if xyz is None or len(xyz) == 0:
             return
 
+        stamp = float(data['ts'])
+        if not np.isfinite(stamp) or stamp <= self._last_cloud_stamp:
+            return
+        now = self._sim_time if self.use_sim_time else rospy.Time.now().to_sec()
+        if not 0.0 <= now-stamp <= 1.0:
+            return
         header = rospy.Header()
-        header.stamp = rospy.Time.from_sec(data["ts"])
+        header.stamp = rospy.Time.from_sec(stamp)
         header.frame_id = data.get("frame_id", "map")
+        if 'body_pose' in data:
+            pose = np.asarray(data['body_pose'], dtype=float)
+            if (header.frame_id != self.map_frame or pose.shape != (7,) or
+                    not np.all(np.isfinite(pose)) or np.linalg.norm(pose[3:]) < 1e-9):
+                rospy.logwarn_throttle(2.0, 'Rejected lidar observation with invalid measurement pose')
+                return
+            # Insert the historical measured pose into TF without replacing the
+            # current odometry message. map -> odom is identity in this bridge.
+            if header.stamp not in self._odom_tf_stamps:
+                quat = tuple(pose[3:] / np.linalg.norm(pose[3:]))
+                if self.frame_layout == "odin":
+                    tf_xyz, tf_quat = self._sensor_pose(tuple(pose[:3]), quat)
+                    child = self.imu_frame
+                else:
+                    tf_xyz, tf_quat = tuple(pose[:3]), quat
+                    child = self.base_frame
+                self.tf_broadcaster.sendTransform(
+                    tuple(float(v) for v in tf_xyz),
+                    tuple(float(v) for v in tf_quat),
+                    header.stamp, child, self.odom_frame)
+        self._last_cloud_stamp = stamp
 
         fields = [
             PointField("x", 0, PointField.FLOAT32, 1),
@@ -244,6 +429,8 @@ class BridgeNode:
         ]
         msg = pc2.create_cloud(header, fields, xyz.tolist())
         self.pc_pub.publish(msg)
+        if self.odin_cloud_pub is not None:
+            self.odin_cloud_pub.publish(msg)
 
 
     def publish_image(self, data):
@@ -254,6 +441,8 @@ class BridgeNode:
         msg.format = "jpeg"
         msg.data = data["data"]
         self.img_pub.publish(msg)
+        if self.odin_img_pub is not None:
+            self.odin_img_pub.publish(msg)
 
     def publish_imu(self, data):
         """发布 Imu"""
@@ -279,6 +468,8 @@ class BridgeNode:
             msg.orientation_covariance[0] = -1.0
 
         self.imu_pub.publish(msg)
+        if self.odin_imu_pub is not None:
+            self.odin_imu_pub.publish(msg)
 
 
 if __name__ == "__main__":

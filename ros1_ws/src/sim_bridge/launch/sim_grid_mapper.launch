@@ -1,0 +1,66 @@
+<?xml version="1.0"?>
+<!--
+  Step 3 验证 launch:  仿真点云 -> LaserScan -> grid_mapper -> /map
+
+  前置条件:
+    1. tools/setup_k02_overlay.sh 已在容器内成功执行 (编译 grid_mapper)
+    2. sim_bridge 已经启动 (bridge.launch), /registered_scan 有数据
+    3. TF 树正常 (sim_bridge 已发布 lidar1 / odin1_base_link / base_link)
+
+  仿真 lidar 点云 frame_id = lidar1, lidar1 与 odin1_base_link 重合 (identity)
+-->
+<launch>
+
+  <!-- ============================================================ -->
+  <!-- PointCloud2 -> LaserScan                                      -->
+  <!-- 输入: /registered_scan (frame=lidar1)                         -->
+  <!-- 输出: /scan (frame=odin1_base_link)                           -->
+  <!-- ============================================================ -->
+  <node pkg="pointcloud_to_laserscan" type="pointcloud_to_laserscan_node"
+        name="pc_to_scan" output="screen" required="true">
+    <param name="target_frame"        value="odin1_base_link"/>
+    <param name="transform_tolerance" value="0.1"/>
+    <!-- 切片范围 (target_frame=odin1_base_link, lidar 在世界系 z=0.5m).
+         min_height=-0.2 → 世界系 z=0.3m, 留 30cm 容差不切到地面 z=0.
+         max_height=0.3  → 世界系 z=0.8m, 覆盖车头/腰部障碍.
+         与真机 whole.launch 一致, 避免地面点云被误切进 /scan 当障碍. -->
+    <param name="min_height"          value="-0.2"/>
+    <param name="max_height"          value="0.3"/>
+    <!-- 仿真 RTX LiDAR 360°, 给全视场 -->
+    <param name="angle_min"           value="-3.14159"/>
+    <param name="angle_max"           value="3.14159"/>
+    <param name="angle_increment"     value="0.0087266"/> <!-- 0.5 deg -->
+    <param name="scan_time"           value="0.1"/>
+    <param name="range_min"           value="0.3"/>
+    <param name="range_max"           value="20.0"/>
+    <param name="use_inf"             value="true"/>
+
+    <remap from="cloud_in" to="/registered_scan"/>
+    <remap from="scan"     to="/scan"/>
+  </node>
+
+  <!-- ============================================================ -->
+  <!-- grid_mapper (standalone node)                                  -->
+  <!-- 注意: 不发 map->odom 静态 TF, 由 sim_bridge 提供                -->
+  <!-- ============================================================ -->
+  <node pkg="grid_mapper" type="grid_mapper" name="grid_mapper" output="screen">
+    <param name="scan_topic"          value="/scan"/>
+    <param name="map_topic"           value="/map"/>
+    <param name="resolution"          value="0.1"/>
+    <param name="update_frequency"    value="1.0"/>
+    <param name="probability"         value="0.4"/>
+    <param name="width"               value="50"/>
+    <param name="height"              value="50"/>
+    <param name="map_frame"           value="map"/>
+    <param name="map_file"            value=""/>
+    <param name="map_odom_tf"         value="false"/>
+    <param name="active_window_range" value="1"/>
+
+    <param name="scan_360_min_range"  value="0.3"/>
+    <param name="scan_360_max_range"  value="20.0"/>
+    <param name="chassis_length"      value="1.1"/>
+    <param name="chassis_width"       value="0.8"/>
+    <param name="scan360_frameid"     value="base_link"/>
+  </node>
+
+</launch>

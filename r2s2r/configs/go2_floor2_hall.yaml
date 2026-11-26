@@ -1,0 +1,64 @@
+simulation:
+  headless: false
+  window_width: 1280
+  window_height: 720
+  render_opt:
+    enabled: true
+    reflections: false
+    translucency: false
+    indirect_diffuse: false
+    shadows: false
+    ambient_occlusion: false
+scene:
+  environment:
+    enabled: true
+    usdz_path: /dataset/floor2_hall_3dgs.usdz
+    position:
+    - 0.0
+    - 0.0
+    - 1.35
+    orientation:
+    - 0.0
+    - 0.0
+    - 0.0
+    scale:
+    - 1.0
+    - 1.0
+    - 1.0
+    add_collision: true
+    keep_invisible_collision_meshes: true
+  use_default_ground: true
+  physics:
+    collision_approximation: none
+    contact_offset: 0.08
+    rest_offset: 0.01
+  ground_z_offset: -0.02
+quadruped:
+  robot_type: go2
+  prim_path: /World/Quadruped
+  position:
+  - -2.860427
+  - -0.850897
+  - 0.6
+lighting:
+  dome_intensity: 1000.0
+  distant_intensity: 800.0
+  distant_rotation:
+  - -80
+  - 0
+  - 0
+sensor_suite:
+  enabled: true
+  calibration_dir: calibration/odin1_go2
+  camera_render_scale: 0.5
+bridge:
+  host: 0.0.0.0
+  port: 9090
+  pose_rate: 50
+  pointcloud_rate: 10
+  image_rate: 5
+  image_quality: 70
+control:
+  linear_speed: 3.0
+  lateral_speed: 3.0
+  yaw_speed: 3.0

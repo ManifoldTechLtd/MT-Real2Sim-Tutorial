@@ -1,0 +1,9 @@
+# Body vx, body vy, body yaw rate. Policy commands retain physical units.
+kp: [0.4, 0.4, 0.5]
+ki: [0.4, 0.4, 0.6]
+filter_tau: 0.25
+integral_limit: [0.25, 0.25, 0.35]
+correction_limit: [0.35, 0.35, 0.5]
+slew_rate: [0.8, 0.8, 1.2]
+warmup_seconds: 1.0
+zero_threshold: 0.001

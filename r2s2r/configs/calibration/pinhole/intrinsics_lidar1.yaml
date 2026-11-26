@@ -2,12 +2,24 @@
 # LiDAR 内参配置 - lidar1
 # ========================================
 #
-# MT-MLXS: 基于 ZVISION ML-Xs 的自定义固态 LiDAR 配置
-#   - 原型: ZVISION ML-Xs (123°×32°, 108K pts, 250m)
-#   - 改动: fireTimeNs 置零 (单帧全量), 1/4 点密度 (27K pts/frame)
-#   - 详细说明见 docs/lidar_guide.md
+# 使用 Isaac Sim RTX LiDAR 内置配置
 
 model: rtx_lidar
 
-# 自定义 JSON 配置 (需对应 USD 文件, 见 docs/lidar_guide.md)
-config_name: "lidar_configs/json/MT_MLXS.json"
+# RTX LiDAR 内置配置名称
+# 可选值参考 Isaac Sim 内置配置:
+#   旋转式:
+#     Ouster: "OS1_REV7_128ch10hz1024res", "OS1_REV6_32ch10hz1024res", ...
+#     HESAI:  "Hesai_XT32_SD10"
+#     SICK:   "SICK_tim781", "SICK_multiScan136", ...
+#     NVIDIA: "Example_Rotary"
+#   固态 (无旋转畸变, 单帧全量点云):
+#     ZVISION: "ZVISION_ML30S" (153°×73°, 51K pts, 45m)
+#              "ZVISION_MLXS" (123°×32°, 108K pts, 250m)
+#     NVIDIA:  "Simple_Example_Solid_State" (5°×16°, demo only)
+# 低延迟配置 (51K 点/帧, 减少 RViz 传输延迟)
+config_name: "lidar_configs/json/MLXS_nofire_quarter.json"
+# 其他可用配置:
+#   "Example_Rotary" — 130K+ pts/frame, 高清但延迟大
+#   "ZVISION_MLXS"   — 108K pts/frame
+#   自定义 JSON: 需先用 tools/convert_lidar_json.py 转为 .usd

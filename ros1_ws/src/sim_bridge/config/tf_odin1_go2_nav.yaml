@@ -1,0 +1,11 @@
+# Go2 + ODIN1 simulation profile for ONS2 navigation.
+# frame_layout=odin: sim owns map->odom and odom->imu (sensor pose);
+# the ONS2 launch owns imu->odin1_base_link->base_link.
+
+frame_layout: odin
+publish_odin1_aliases: true
+
+base_height: 0.32
+sensor_base_offset_xyz: [0.313012319746, -0.024932621673, 0.085963432621]
+sensor_base_rotation_xyzw: [-0.008260020031, -0.002110005117, -0.004740011495, 0.999952424988]
+imu_frame: imu

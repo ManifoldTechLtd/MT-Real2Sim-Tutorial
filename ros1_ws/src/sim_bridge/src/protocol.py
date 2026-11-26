@@ -25,7 +25,8 @@ MSG_POINTCLOUD = 0x02
 MSG_CMD_VEL = 0x03
 MSG_IMAGE = 0x04
 MSG_IMU = 0x05
-MSG_RESET = 0x06
+MSG_CLOCK = 0x06
+MSG_RESET = 0x30
 
 
 # ---- 编码 ----
@@ -38,9 +39,13 @@ def encode_cmd_vel(vx: float, vy: float, wz: float) -> bytes:
     return header + payload_bytes
 
 
-def encode_reset() -> bytes:
-    """编码 RESET 消息"""
-    payload_bytes = msgpack.packb({}, use_bin_type=True)
+def encode_reset(to_start: bool = True) -> bytes:
+    """编码 RESET 消息
+    Args:
+        to_start: True = 回 config 起点 (yaw=0); False = 原地恢复 (保留 xy/yaw, 清 roll/pitch)
+    """
+    payload = {"to_start": bool(to_start)}
+    payload_bytes = msgpack.packb(payload, use_bin_type=True)
     header = struct.pack(HEADER_FMT, MAGIC, MSG_RESET, len(payload_bytes))
     return header + payload_bytes
 

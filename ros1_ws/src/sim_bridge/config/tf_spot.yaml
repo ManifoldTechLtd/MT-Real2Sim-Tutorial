@@ -1,0 +1,9 @@
+# Spot (SpotFlatTerrainPolicy) sim_bridge 静态 TF 偏移
+#
+# base_link ≡ Spot body link, 站立时足底距 body 约 0.237m, lidar 挂在 body 上方 0.8m.
+# 这是 bridge_node.py 历史默认值, 保持向后兼容.
+
+base_height: 0.237
+sensor_base_offset_xyz: [0.0, 0.0, 0.8]
+camera_offset_xyz: [0.3, 0.0, 0.6]
+imu_offset_xyz: [0.0, 0.0, 0.5]

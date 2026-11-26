@@ -1,0 +1,36 @@
+FROM ros:noetic-perception
+
+# 安装基础工具
+RUN apt-get update && apt-get install -y \
+    python3-pip \
+    python3-catkin-tools \
+    ros-noetic-rviz \
+    ros-noetic-tf \
+    ros-noetic-tf2-ros \
+    ros-noetic-pcl-ros \
+    ros-noetic-sensor-msgs \
+    ros-noetic-geometry-msgs \
+    ros-noetic-nav-msgs \
+    ros-noetic-pointcloud-to-laserscan \
+    ros-noetic-map-server \
+    ros-noetic-rosbridge-server \
+    ros-noetic-tf2-geometry-msgs \
+    git \
+    vim \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装Python依赖
+RUN pip3 install msgpack numpy
+
+# 创建工作空间
+RUN mkdir -p /catkin_ws/src
+WORKDIR /catkin_ws
+
+# 预编译工作空间（复制后会重新编译）
+RUN bash -c "source /opt/ros/noetic/setup.bash && catkin_make"
+
+# 设置环境
+ENV ROS_MASTER_URI=http://localhost:11311
+ENV ROS_HOSTNAME=localhost
+
+CMD ["bash"]

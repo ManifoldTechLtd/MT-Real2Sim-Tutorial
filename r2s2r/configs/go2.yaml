@@ -1,7 +1,8 @@
 # ========================================
 # Isaac Real2Sim2Real — Go2 仿真配置
 # ========================================
-# NOTE: Go2 RL policy 当前有已知稳定性问题, 待修复后切换
+# 最终部署目标: Unitree Go2 + ODIN1 LiDAR
+# Go2 MoE-CTS + velocity PI; continuous high stairs still require adaptation.
 
 simulation:
   headless: false
@@ -16,7 +17,7 @@ simulation:
 scene:
   environment:
     enabled: true
-    usdz_path: "~/dataset/isaac/playground02/usdz/scene_final.usdz"
+    usdz_path: "/dataset/tunnel1.usdz"
     position: [0.0, 0.0, 0.0]
     orientation: [0.0, 0.0, 0.0]
     scale: [1.0, 1.0, 1.0]
@@ -42,7 +43,7 @@ lighting:
 
 sensor_suite:
   enabled: true
-  calibration_dir: "calibration/pinhole"
+  calibration_dir: "calibration/odin1_go2"
 
 # TCP 桥接配置
 bridge:

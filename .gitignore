@@ -2,30 +2,24 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
 *.egg-info/
 dist/
 build/
-*.egg
 
-# Virtual environments
-.venv/
-venv/
-env/
-
-# Isaac Sim
-lut_cache/
-*.log
-_isaac_sim/
-
-# ROS build artifacts
+# ROS
 ros1_ws/build/
 ros1_ws/devel/
-ros1_ws/install/
-ros1_ws/logs/
 ros1_ws/.catkin_workspace
+ros1_ws/install/
+
+# Isaac Sim
+*.log
+sensor_suite_debug.log
 
 # Docker
-docker/.env
+.env
 
 # IDE
 .vscode/
@@ -34,20 +28,25 @@ docker/.env
 *.swo
 *~
 
-# OS
-.DS_Store
-Thumbs.db
-
-# Data / outputs
-output/
-*.ply
-*.usdz
-*.usd
-!lidar_configs/usd/MT_MLXS.usd
-
-# Debug
+# Logs
+/tmp/
 *.log
-debug_*.png
 
-# Windsurf
-.windsurf/
+# Dataset (scene files are usually large, not committed; keep only the docs)
+dataset/*
+!dataset/README.md
+!dataset/README.zh-CN.md
+!dataset/.gitkeep
+*.usdz
+
+# Cache
+.cache/
+*.lut
+
+# Local simulator diagnostic captures
+hang_logs/
+
+# local scenes are not redistributable; the dataset/ rules above keep the docs tracked
+
+# scene-specific LiDAR color LUTs (generated)
+integrations/ons2/color_luts/*.npz

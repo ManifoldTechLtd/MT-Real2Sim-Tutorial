@@ -385,33 +385,42 @@ class Go2FlatTerrainPolicy(PolicyController):
 
     def initialize(self, physics_sim_view=None) -> None:
         """
-        自定义初始化: 绕过 Spot env yaml 的关节名匹配,
-        直接设置 Go2 的关节属性.
+        稳定初始化版（Isaac Sim 5.1）
         """
+        import time
+
         self.robot.initialize(physics_sim_view=physics_sim_view)
+
+        # 等待 articulation view 就绪
+        for _ in range(50):
+            try:
+                if self.robot._articulation_view is not None:
+                    break
+            except:
+                pass
+            time.sleep(0.02)
+
         self.robot.get_articulation_controller().set_effort_modes("force")
         get_physx_simulation_interface().flush_changes()
         self.robot.get_articulation_controller().switch_control_mode("position")
 
         n_dof = len(self.robot.dof_names)
-        print(f"  Go2 DOF count: {n_dof}")
-        print(f"  Go2 joint names: {self.robot.dof_names}")
+        print(f"Go2 DOF count: {n_dof}")
+        print(f"Go2 joint names: {self.robot.dof_names}")
 
-        # Go2 PD 增益 (from go2_config: stiffness=20, damping=0.5)
         stiffness = [20.0] * n_dof
         damping = [0.5] * n_dof
-        self.robot._articulation_view.set_gains(stiffness, damping)
 
-        # Go2 电机限制
-        max_effort = [23.5] * n_dof
-        self.robot._articulation_view.set_max_efforts(max_effort)
-        get_physx_simulation_interface().flush_changes()
-        max_vel = [30.0] * n_dof
-        self.robot._articulation_view.set_max_joint_velocities(max_vel)
+        try:
+            self.robot._articulation_view.set_gains(stiffness, damping)
+            self.robot._articulation_view.set_max_efforts([23.5] * n_dof)
+            self.robot._articulation_view.set_max_joint_velocities([30.0] * n_dof)
+        except Exception as e:
+            print("[WARN] articulation gains set failed:", e)
 
-        # 默认站立姿态 — 按关节名匹配
         self.default_pos = np.zeros(n_dof)
         self.default_vel = np.zeros(n_dof)
+
         matched = 0
         for i, dof_name in enumerate(self.robot.dof_names):
             for key, val in _GO2_DEFAULT_ANGLES.items():
@@ -419,54 +428,99 @@ class Go2FlatTerrainPolicy(PolicyController):
                     self.default_pos[i] = val
                     matched += 1
                     break
-        print(f"  Go2 matched {matched}/{n_dof} joints to default angles")
+
+        print(f"Go2 matched {matched}/{n_dof} joints")
 
     def _compute_observation(self, command):
         """
-        与 Spot 相同的 48 维观测向量:
-        [lin_vel_b(3), ang_vel_b(3), gravity_b(3), command(3),
-         joint_pos_err(12), joint_vel(12), prev_action(12)]
+        稳定版：防首帧空值 / shape错误
         """
-        lin_vel_I = self.robot.get_linear_velocity()
-        ang_vel_I = self.robot.get_angular_velocity()
-        pos_IB, q_IB = self.robot.get_world_pose()
+        obs = np.zeros(48, dtype=np.float32)
 
-        R_IB = quat_to_rot_matrix(q_IB)
-        R_BI = R_IB.transpose()
-        lin_vel_b = np.matmul(R_BI, lin_vel_I)
-        ang_vel_b = np.matmul(R_BI, ang_vel_I)
-        gravity_b = np.matmul(R_BI, np.array([0.0, 0.0, -1.0]))
+        try:
+            lin_vel_I = self.robot.get_linear_velocity()
+            ang_vel_I = self.robot.get_angular_velocity()
+            pos_IB, q_IB = self.robot.get_world_pose()
+        except Exception:
+            return obs
 
-        obs = np.zeros(48)
+        # ---------- 防空值 ----------
+        if lin_vel_I is None:
+            lin_vel_I = np.zeros(3)
+        if ang_vel_I is None:
+            ang_vel_I = np.zeros(3)
+        if q_IB is None:
+            q_IB = np.array([1, 0, 0, 0])
+
+        lin_vel_I = np.array(lin_vel_I).reshape(-1)
+        ang_vel_I = np.array(ang_vel_I).reshape(-1)
+
+        if lin_vel_I.shape[0] < 3:
+            lin_vel_I = np.zeros(3)
+        else:
+            lin_vel_I = lin_vel_I[:3]
+
+        if ang_vel_I.shape[0] < 3:
+            ang_vel_I = np.zeros(3)
+        else:
+            ang_vel_I = ang_vel_I[:3]
+
+        try:
+            R_IB = quat_to_rot_matrix(q_IB)
+            R_BI = R_IB.T
+        except Exception:
+            R_BI = np.eye(3)
+
+        lin_vel_b = R_BI @ lin_vel_I
+        ang_vel_b = R_BI @ ang_vel_I
+        gravity_b = R_BI @ np.array([0.0, 0.0, -1.0])
+
         obs[:3] = lin_vel_b
         obs[3:6] = ang_vel_b
         obs[6:9] = gravity_b
         obs[9:12] = command
 
-        current_joint_pos = self.robot.get_joint_positions()
-        current_joint_vel = self.robot.get_joint_velocities()
+        try:
+            joint_pos = self.robot.get_joint_positions()
+            joint_vel = self.robot.get_joint_velocities()
 
-        # 只取前 12 个关节 (忽略 Go2 可能有的额外固定关节)
-        n = min(12, len(current_joint_pos))
-        obs[12 : 12 + n] = current_joint_pos[:n] - self.default_pos[:n]
-        obs[24 : 24 + n] = current_joint_vel[:n]
-        obs[36 : 36 + n] = self._previous_action[:n]
+            joint_pos = np.array(joint_pos).reshape(-1)
+            joint_vel = np.array(joint_vel).reshape(-1)
+
+            n = min(12, len(joint_pos), len(joint_vel))
+
+            obs[12:12+n] = joint_pos[:n] - self.default_pos[:n]
+            obs[24:24+n] = joint_vel[:n]
+            obs[36:36+n] = self._previous_action[:n]
+
+        except Exception:
+            pass
 
         return obs
 
     def forward(self, dt, command):
-        """
-        计算并应用关节位置目标
-        """
-        if self._policy_counter % self._decimation == 0:
-            obs = self._compute_observation(command)
-            self.action = self._compute_action(obs)
-            self._previous_action = self.action.copy()
+
+        if not hasattr(self, "action"):
+            self.action = np.zeros(12)
+
+        try:
+            if self._policy_counter % self._decimation == 0:
+                obs = self._compute_observation(command)
+                self.action = self._compute_action(obs)
+                self._previous_action = self.action.copy()
+        except Exception as e:
+            print("[WARN] policy step failed:", e)
+            self.action = np.zeros(12)
 
         n = min(12, len(self.default_pos))
         target = self.default_pos.copy()
         target[:n] += self.action[:n] * self._action_scale
-        action = ArticulationAction(joint_positions=target)
-        self.robot.apply_action(action)
+
+        try:
+            self.robot.apply_action(
+                ArticulationAction(joint_positions=target)
+            )
+        except:
+            pass
 
         self._policy_counter += 1

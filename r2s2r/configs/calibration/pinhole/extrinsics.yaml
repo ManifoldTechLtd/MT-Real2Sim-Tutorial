@@ -16,7 +16,7 @@ ref_imu:
   frequency: 200
   # T_body_rimu: 安装变换 (含仿真 z 偏移 0.20m)
   mount_extrinsics:
-    translation: [0.0, 0.0, 0.20]
+    translation: [0.0, 0.0, 0.50]
     rotation: [1.0, 0.0, 0.0, 0.0]
 
 # 其余传感器，extrinsics 均为 T_rimu_sensor (相对于 ref_imu)

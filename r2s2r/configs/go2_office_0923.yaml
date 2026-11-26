@@ -1,0 +1,59 @@
+# ========================================
+# Isaac Real2Sim2Real — Go2 仿真配置
+# ========================================
+# 最终部署目标: Unitree Go2 + ODIN1 LiDAR
+# Go2 MoE-CTS + velocity PI; continuous high stairs still require adaptation.
+
+simulation:
+  headless: true
+  render_opt:
+    enabled: true
+    reflections: false
+    translucency: false
+    indirect_diffuse: false
+    shadows: false
+    ambient_occlusion: false
+
+scene:
+  environment:
+    enabled: true
+    usdz_path: "/dataset/office_0923.usdz"
+    position: [0.0, 0.0, 0.0]
+    orientation: [0.0, 0.0, 0.0]
+    scale: [1.0, 1.0, 1.0]
+    add_collision: true
+
+  use_default_ground: false
+  ground_z_offset: 0.0
+
+  physics:
+    collision_approximation: "meshSimplification"
+    contact_offset: 0.08
+    rest_offset: 0.01
+
+quadruped:
+  robot_type: "go2"
+  prim_path: "/World/Quadruped"
+  position: [0.0, 0.0, 0.5]
+
+lighting:
+  dome_intensity: 1000.0
+  distant_intensity: 800.0
+  distant_rotation: [-80, 0, 0]
+
+sensor_suite:
+  enabled: true
+  calibration_dir: "calibration/odin1_go2"
+
+# TCP 桥接配置
+bridge:
+  host: "0.0.0.0"
+  port: 9090
+  pose_rate: 50
+  pointcloud_rate: 10
+
+# 手动控制参数
+control:
+  linear_speed: 3.0
+  lateral_speed: 3.0
+  yaw_speed: 3.0

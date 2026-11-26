@@ -21,7 +21,7 @@ import time
 from collections import deque
 
 from r2s2r.bridge.protocol import (
-    encode_pose, encode_pointcloud, encode_image, encode_imu,
+    encode_pose, encode_pointcloud, encode_image, encode_imu, encode_clock,
     decode_message, MSG_CMD_VEL, MSG_RESET,
     HEADER_SIZE,
 )
@@ -48,8 +48,9 @@ class TcpBridgeServer:
         self._cmd_vel_time = 0.0
         self._cmd_vel_lock = threading.Lock()
 
-        # 重置请求标志
-        self._reset_requested = False
+        # 复位请求 (线程安全, 一次性消费)
+        # None = 无请求; True = 回起点; False = 原地恢复
+        self._reset_request = None
         self._reset_lock = threading.Lock()
 
         # 发送队列 (主线程写, IO 线程发)
@@ -78,6 +79,10 @@ class TcpBridgeServer:
         with self._client_lock:
             return self._client_sock is not None
 
+    def send_clock(self, timestamp):
+        """Queue the simulation clock before observations from this step."""
+        self._send_queue.append(encode_clock(timestamp))
+
     def send_pose(self, x, y, z, qx, qy, qz, qw,
                   vx=0.0, vy=0.0, vz=0.0,
                   wx=0.0, wy=0.0, wz=0.0,
@@ -87,18 +92,20 @@ class TcpBridgeServer:
                           vx, vy, vz, wx, wy, wz, timestamp)
         self._send_queue.append(msg)
 
-    def send_pointcloud(self, xyz, frame_id="map", timestamp=None):
+    def send_pointcloud(self, xyz, frame_id="map", timestamp=None, body_pose=None):
         """发送 POINTCLOUD 消息 (非阻塞)"""
         if xyz is None or len(xyz) == 0:
             return
-        msg = encode_pointcloud(xyz, frame_id, timestamp)
+        msg = encode_pointcloud(xyz, frame_id, timestamp, body_pose)
         self._send_queue.append(msg)
 
-    def send_image(self, rgb, frame_id="camera", quality=80, timestamp=None):
+    def send_image(self, rgb, frame_id="camera", quality=80, timestamp=None,
+                   intrinsics=None, body_to_camera=None):
         """发送 IMAGE 消息 (JPEG 压缩, 非阻塞)"""
         if rgb is None or rgb.size == 0:
             return
-        msg = encode_image(rgb, frame_id, quality, timestamp)
+        msg = encode_image(rgb, frame_id, quality, timestamp,
+                           intrinsics=intrinsics, body_to_camera=body_to_camera)
         self._send_queue.append(msg)
 
     def send_imu(self, lin_acc, ang_vel, orientation=None,
@@ -123,13 +130,18 @@ class TcpBridgeServer:
                 return None
             return self._cmd_vel
 
-    def get_reset_requested(self) -> bool:
-        """检查并消费重置请求标志 (一次性)"""
+    def get_reset_requested(self):
+        """检查并消费复位请求 (一次性)
+
+        Returns:
+            None: 无请求
+            True: 回起点复位 (ROS 端 /sim_reset 触发)
+            False: 原地恢复复位
+        """
         with self._reset_lock:
-            if self._reset_requested:
-                self._reset_requested = False
-                return True
-            return False
+            req = self._reset_request
+            self._reset_request = None
+            return req
 
     # ---- 内部 IO 线程 ----
 
@@ -219,10 +231,13 @@ class TcpBridgeServer:
                        self._last_logged_cmd != (vx, vy, wz):
                         print(f"[TcpBridgeServer] CMD_VEL received: vx={vx:.2f} vy={vy:.2f} wz={wz:.2f}")
                         self._last_logged_cmd = (vx, vy, wz)
+
                 elif msg_type == MSG_RESET:
+                    to_start = bool(payload.get("to_start", True))
                     with self._reset_lock:
-                        self._reset_requested = True
-                    print("[TcpBridgeServer] RESET received")
+                        self._reset_request = to_start
+                    print(f"[TcpBridgeServer] RESET received: "
+                          f"{'to_start' if to_start else 'in_place'}")
 
         except (ConnectionResetError, BrokenPipeError, OSError):
             self._handle_disconnect(sock, sel)
@@ -250,20 +265,18 @@ class TcpBridgeServer:
             self._write_buf = b""
             return
 
-        # 如果写缓冲区为空, 从队列取下一条消息
-        while not self._write_buf and self._send_queue:
-            self._write_buf = self._send_queue.popleft()
-
-        if not self._write_buf:
-            return
-
-        # 非阻塞发送: 能发多少发多少, 剩余下次继续
-        try:
-            sent = sock.send(self._write_buf)
-            if sent > 0:
+        # Drain ready messages so adding /clock cannot build a per-message backlog.
+        while self._write_buf or self._send_queue:
+            if not self._write_buf:
+                self._write_buf = self._send_queue.popleft()
+            try:
+                sent = sock.send(self._write_buf)
+                if sent <= 0:
+                    return
                 self._write_buf = self._write_buf[sent:]
-        except BlockingIOError:
-            pass  # TCP 发送缓冲区满, 下次重试
-        except (ConnectionResetError, BrokenPipeError, OSError):
-            self._write_buf = b""
-            self._send_queue.clear()
+            except BlockingIOError:
+                return  # Retain partially sent frames until the socket is writable.
+            except (ConnectionResetError, BrokenPipeError, OSError):
+                self._write_buf = b""
+                self._send_queue.clear()
+                return

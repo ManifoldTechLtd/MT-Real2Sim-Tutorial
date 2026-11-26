@@ -1,0 +1,658 @@
+"""
+run_sim.py
+Isaac Sim 5.1 最终稳定版（Go2 / Spot 通用）
+
+修复：
+- 黑屏
+- F键聚焦失效
+- Keyboard API 兼容
+- RTX LiDAR Reference time 0/0
+- articulation 未初始化
+- callback 崩溃拖死渲染
+- timeline/play异常
+- 第三人称相机
+- TCP bridge
+- reset 可重复运行
+
+启动:
+./tools/run_isaac.sh r2s2r/run_sim.py --config configs/config.yaml
+"""
+
+# =========================================================
+# 0. CLI
+# =========================================================
+import argparse
+import os
+import sys
+import time
+import math
+import yaml
+import numpy as np
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--config", required=True)
+parser.add_argument("--headless", action="store_true")
+args, _ = parser.parse_known_args()
+
+# =========================================================
+# 1. config
+# =========================================================
+with open(args.config, "r") as f:
+    config = yaml.safe_load(f)
+
+# 环境变量覆盖
+robot_type_env = os.getenv('ROBOT_TYPE')
+if robot_type_env:
+    config['quadruped']['robot_type'] = robot_type_env
+    print(f"[config] ROBOT_TYPE overridden by env: {robot_type_env}")
+
+scene_path_env = os.getenv('SCENE_PATH')
+if scene_path_env:
+    config['scene']['environment']['usdz_path'] = scene_path_env
+    print(f"[config] SCENE_PATH overridden by env: {scene_path_env}")
+
+sim_cfg = config.get("simulation", {})
+headless = args.headless or sim_cfg.get("headless", False)
+
+# =========================================================
+# 2. SimulationApp (必须最先)
+# =========================================================
+from isaacsim import SimulationApp
+
+_app_kwargs = {
+    "headless": headless,
+    "renderer": sim_cfg.get("renderer", "RayTracedLighting"),
+    "width": int(sim_cfg.get("width", 1600)),
+    "height": int(sim_cfg.get("height", 900)),
+}
+simulation_app = SimulationApp(_app_kwargs)
+
+print(f"[BOOT] SimulationApp started: {_app_kwargs['width']}x{_app_kwargs['height']} "
+      f"renderer={_app_kwargs['renderer']} headless={headless}")
+
+# =========================================================
+# 3. path
+# =========================================================
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+# =========================================================
+# 4. imports after app
+# =========================================================
+import carb
+import omni.timeline
+import omni.usd
+import omni.appwindow
+
+from pxr import UsdGeom, Usd
+
+from isaacsim.core.api import World
+
+from r2s2r.core.robot_factory import build_quadruped_scene
+from r2s2r.bridge.tcp_server import TcpBridgeServer
+
+# =========================================================
+# 5. world
+# =========================================================
+world = World(
+    stage_units_in_meters=1.0,
+    physics_dt=1.0 / 200.0,
+    rendering_dt=1.0 / 60.0,
+)
+
+# =========================================================
+# 6. scene
+# =========================================================
+robot, suite = build_quadruped_scene(world, config)
+
+print("[BOOT] Scene built")
+
+# =========================================================
+# 7. bridge
+# =========================================================
+bridge_cfg = config.get("bridge", {})
+
+bridge = TcpBridgeServer(
+    host=bridge_cfg.get("host", "0.0.0.0"),
+    port=bridge_cfg.get("port", 9090),
+)
+
+# =========================================================
+# 8. prim path
+# =========================================================
+stage = omni.usd.get_context().get_stage()
+
+quad_cfg = config["quadruped"]
+
+robot_type = quad_cfg.get("robot_type", "go2")
+# 各机器人 base 在 USD 里的子 prim 名称.
+_BODY_LINK_BY_TYPE = {
+    "spot": "body",
+    "go2": "base",
+    "kinematic_car": "base_link",
+}
+body_name = _BODY_LINK_BY_TYPE.get(robot_type, "body")
+
+body_path = f"{quad_cfg.get('prim_path','/World/Quadruped')}/{body_name}"
+body_prim = stage.GetPrimAtPath(body_path)
+
+# =========================================================
+# 9. command
+# =========================================================
+cmd = np.zeros(3, dtype=np.float32)
+key_state = {}
+
+# 手动控制速度（从 config.control 读取，fallback 到原硬编码值）
+_ctrl_cfg = config.get("control", {})
+KB_LINEAR = float(_ctrl_cfg.get("linear_speed", 0.8))
+KB_LATERAL = float(_ctrl_cfg.get("lateral_speed", 0.5))
+KB_YAW = float(_ctrl_cfg.get("yaw_speed", 0.8))
+print(f"[BOOT] keyboard speed: linear={KB_LINEAR}, lateral={KB_LATERAL}, yaw={KB_YAW}")
+
+# =========================================================
+# 10. math utils
+# =========================================================
+def mat_to_quat(R):
+    """3x3 旋转矩阵 → 四元数 (qx, qy, qz, qw).
+
+    Shepperd 4 分支方法: 按 trace / 最大对角元选分支, 保证 s > 0 在任意旋转下
+    都数值稳定. 单分支版本仅在 trace > 0 (即 |yaw| < 120° 时, 纯 yaw 下)
+    正确, trace ≤ 0 时静默返回 identity, 表现为 "机头朝后 TF 朝前".
+    """
+    m00, m11, m22 = R[0, 0], R[1, 1], R[2, 2]
+    tr = m00 + m11 + m22
+
+    if tr > 0:
+        s = math.sqrt(tr + 1.0) * 2.0
+        qw = 0.25 * s
+        qx = (R[2, 1] - R[1, 2]) / s
+        qy = (R[0, 2] - R[2, 0]) / s
+        qz = (R[1, 0] - R[0, 1]) / s
+    elif m00 > m11 and m00 > m22:
+        s = math.sqrt(1.0 + m00 - m11 - m22) * 2.0
+        qw = (R[2, 1] - R[1, 2]) / s
+        qx = 0.25 * s
+        qy = (R[0, 1] + R[1, 0]) / s
+        qz = (R[0, 2] + R[2, 0]) / s
+    elif m11 > m22:
+        s = math.sqrt(1.0 + m11 - m00 - m22) * 2.0
+        qw = (R[0, 2] - R[2, 0]) / s
+        qx = (R[0, 1] + R[1, 0]) / s
+        qy = 0.25 * s
+        qz = (R[1, 2] + R[2, 1]) / s
+    else:
+        s = math.sqrt(1.0 + m22 - m00 - m11) * 2.0
+        qw = (R[1, 0] - R[0, 1]) / s
+        qx = (R[0, 2] + R[2, 0]) / s
+        qy = (R[1, 2] + R[2, 1]) / s
+        qz = 0.25 * s
+
+    return qx, qy, qz, qw
+
+
+def get_pose():
+    """
+    返回 body link 在世界系的 4x4 位姿.
+    仿真中 odin1_base_link ≡ body link, lidar1/imu_link 通过 bridge_node
+    静态 TF 表达物理偏移 (与真机几何拓扑一致, 高度由 spot body 决定).
+    """
+    if not body_prim.IsValid():
+        return None
+
+    xform = UsdGeom.Imageable(body_prim).ComputeLocalToWorldTransform(
+        Usd.TimeCode.Default()
+    )
+
+    mat = np.array(xform).T
+    return mat
+
+
+# =========================================================
+# 11. keyboard
+# =========================================================
+# 必须保留为模块级变量, 否则 subscription handle 会被 GC, 回调失效
+_kb_sub = None
+_kb_input_iface = None
+_kb_handle = None
+_r_prev = False  # R 键边沿检测（避免长按重复触发原地复位）
+_p_prev = False  # P 键边沿检测（回起点）
+
+# 起点位姿: 来自 config.yaml quadruped.position. P 键复位时回到这里.
+_START_XYZ = tuple(float(v) for v in quad_cfg.get("position", [0.0, 0.0, 0.5]))
+
+def setup_keyboard():
+    global _kb_sub, _kb_input_iface, _kb_handle
+    try:
+        _kb_input_iface = carb.input.acquire_input_interface()
+        app_window = omni.appwindow.get_default_app_window()
+        _kb_handle = app_window.get_keyboard()
+
+        def cb(e, *args, **kwargs):
+            try:
+                if hasattr(e.input, "name"):
+                    name = e.input.name
+                else:
+                    name = str(e.input)
+
+                name = name.upper()
+
+                if e.type == carb.input.KeyboardEventType.KEY_PRESS:
+                    key_state[name] = True
+                    print(f"[KB] press {name}")
+
+                elif e.type == carb.input.KeyboardEventType.KEY_RELEASE:
+                    key_state[name] = False
+
+            except Exception as ex:
+                print("[KB WARN]", ex)
+
+            return True
+
+        _kb_sub = _kb_input_iface.subscribe_to_keyboard_events(_kb_handle, cb)
+
+        print(f"[BOOT] keyboard ready, sub={_kb_sub}")
+
+    except Exception as e:
+        print("[WARN] keyboard init fail:", e)
+
+
+def reset_robot(to_start: bool = False):
+    """复位机器人姿态.
+
+    R 键 (to_start=False): 保留当前 (x, y, yaw), 抬升 z 避免穿模, pitch/roll 清零,
+        关节回默认站立, 速度清零. 用于侧翻/卡障碍原地恢复.
+    P 键 (to_start=True): 强制回到 config.yaml `quadruped.position` 起点, yaw=0,
+        其余清零. 用于 NeuPAN 测试反复回原点.
+    """
+    try:
+        pos, quat = robot.robot.get_world_pose()
+        if pos is None or quat is None:
+            print("[RESET] pose unavailable")
+            return
+
+        if to_start:
+            sx, sy, sz = _START_XYZ
+            x, y = sx, sy
+            z = max(sz, 0.5)
+            yaw = 0.0
+        else:
+            x, y, z = float(pos[0]), float(pos[1]), float(pos[2])
+            # Isaac Sim quat order: (w, x, y, z)
+            w, qx, qy, qz = float(quat[0]), float(quat[1]), float(quat[2]), float(quat[3])
+            yaw = math.atan2(2.0 * (w * qz + qx * qy),
+                             1.0 - 2.0 * (qy * qy + qz * qz))
+            z = max(z, 0.5)
+
+        new_quat = np.array(
+            [math.cos(yaw / 2.0), 0.0, 0.0, math.sin(yaw / 2.0)],
+            dtype=np.float64,
+        )
+        # 抬起到至少 0.5m，避免从地下/障碍内重生
+        new_pos = np.array([x, y, z], dtype=np.float64)
+
+        robot.robot.set_world_pose(new_pos, new_quat)
+        robot.robot.set_linear_velocity(np.zeros(3))
+        robot.robot.set_angular_velocity(np.zeros(3))
+
+        if hasattr(robot, "default_pos") and robot.default_pos is not None:
+            n_dof = len(robot.default_pos)
+            try:
+                robot.robot.set_joint_positions(robot.default_pos)
+                robot.robot.set_joint_velocities(np.zeros(n_dof))
+            except Exception as ex:
+                # 部分 Articulation 需用 _articulation_view 调用
+                try:
+                    robot.robot._articulation_view.set_joint_positions(
+                        robot.default_pos.reshape(1, -1)
+                    )
+                    robot.robot._articulation_view.set_joint_velocities(
+                        np.zeros((1, n_dof))
+                    )
+                except Exception as ex2:
+                    print(f"[RESET WARN] joint reset fallback failed: {ex2}")
+
+        tag = "START" if to_start else "INPLACE"
+        print(f"[RESET {tag}] pos=({x:.2f}, {y:.2f}, {new_pos[2]:.2f}) "
+              f"yaw={math.degrees(yaw):.1f}deg")
+    except Exception as e:
+        print(f"[RESET WARN] {e}")
+
+
+def update_keyboard():
+    """合成 cmd: 键盘优先, 无按键时用 TCP /cmd_vel. R/P 键边沿触发复位."""
+    global _r_prev, _p_prev
+
+    # R 键: 原地复位 (保留 xy/yaw, 清姿态)
+    r_now = key_state.get("R", False)
+    if r_now and not _r_prev:
+        reset_robot(to_start=False)
+    _r_prev = r_now
+
+    # P 键: 回起点 (xy/yaw 强制为 config 起点, yaw=0)
+    p_now = key_state.get("P", False)
+    if p_now and not _p_prev:
+        reset_robot(to_start=True)
+    _p_prev = p_now
+
+    vx = vy = wz = 0.0
+
+    if key_state.get("W", False):
+        vx += KB_LINEAR
+    if key_state.get("S", False):
+        vx -= KB_LINEAR
+    if key_state.get("A", False):
+        vy += KB_LATERAL
+    if key_state.get("D", False):
+        vy -= KB_LATERAL
+    if key_state.get("Q", False):
+        wz += KB_YAW
+    if key_state.get("E", False):
+        wz -= KB_YAW
+
+    # 键盘没动作时, fallback 到 TCP cmd_vel (来自 ROS /cmd_vel → sim_bridge)
+    if vx == 0.0 and vy == 0.0 and wz == 0.0:
+        tcp_cmd = bridge.get_latest_cmd_vel(timeout=0.5)
+        if tcp_cmd is not None:
+            vx, vy, wz = tcp_cmd
+
+    cmd[:] = [vx, vy, wz]
+
+
+# =========================================================
+# 12. camera
+# =========================================================
+def set_camera_static():
+    try:
+        import omni.kit.viewport.utility as vp
+
+        viewport = vp.get_active_viewport()
+
+        viewport.set_camera_position(
+            "/OmniverseKit_Persp",
+            4.0, -4.0, 2.5,
+            True
+        )
+
+        viewport.set_camera_target(
+            "/OmniverseKit_Persp",
+            0.0, 0.0, 0.3,
+            True
+        )
+
+        print("[BOOT] camera ready")
+
+    except Exception as e:
+        print("[WARN] camera:", e)
+
+
+def update_follow_camera():
+    try:
+        mat = get_pose()
+        if mat is None:
+            return
+
+        px, py, pz = mat[0, 3], mat[1, 3], mat[2, 3]
+
+        import omni.kit.viewport.utility as vp
+        viewport = vp.get_active_viewport()
+
+        viewport.set_camera_position(
+            "/OmniverseKit_Persp",
+            px + 3.0,
+            py - 3.0,
+            pz + 2.0,
+            False
+        )
+
+        viewport.set_camera_target(
+            "/OmniverseKit_Persp",
+            px,
+            py,
+            pz + 0.3,
+            False
+        )
+
+    except Exception:
+        pass
+
+
+# =========================================================
+# 13. bridge publish
+# =========================================================
+# 各数据流独立节流, 频率从 config 读取
+_pose_dt = 1.0 / float(bridge_cfg.get("pose_rate", 50))
+_pc_dt = 1.0 / float(bridge_cfg.get("pointcloud_rate", 5))
+_img_dt = 1.0 / float(bridge_cfg.get("image_rate", 10))
+_imu_dt = 1.0 / float(bridge_cfg.get("imu_rate", 50))
+_img_quality = int(bridge_cfg.get("image_quality", 80))
+
+_last_pose_pub = 0.0
+_last_pc_pub = 0.0
+_last_img_pub = 0.0
+_last_imu_pub = 0.0
+_pc_diag_count = 0   # 点云帧计数 (诊断用)
+_img_diag_count = 0  # 图像帧计数 (诊断用)
+_imu_diag_count = 0  # IMU 帧计数 (诊断用)
+
+# ---- lidar self-filter (履带车专用, 详见 kinematic_car.yaml) ----
+# 履带车 chassis_visual cube 被 RTX Lidar 光追打回的自身回波在 lidar 局部系是常量盒,
+# 用 numpy mask 整盒剔除. pose-invariant (chassis 与 lidar 同挂 base_link).
+_self_filter_enabled = False
+_self_filter_bounds = None  # (x_half, y_half, z_min, z_max)
+if robot_type == "kinematic_car":
+    _sf_cfg = config.get("kinematic_car", {}).get("lidar_self_filter", {})
+    if bool(_sf_cfg.get("enable", True)):
+        _self_filter_enabled = True
+        _self_filter_bounds = (
+            float(_sf_cfg.get("x_half", 0.60)),
+            float(_sf_cfg.get("y_half", 0.45)),
+            float(_sf_cfg.get("z_min", -0.55)),
+            float(_sf_cfg.get("z_max", -0.10)),
+        )
+        print(f"[BOOT] lidar_self_filter ENABLED (lidar local) "
+              f"bounds=|x|<{_self_filter_bounds[0]:.2f}, "
+              f"|y|<{_self_filter_bounds[1]:.2f}, "
+              f"z∈[{_self_filter_bounds[2]:.2f},{_self_filter_bounds[3]:.2f}]")
+
+
+def _apply_lidar_self_filter(pc):
+    """剔除 lidar 局部系 bbox 内的 self-scan 点 (chassis_visual 回波)."""
+    if not _self_filter_enabled or _self_filter_bounds is None or len(pc) == 0:
+        return pc
+    xh, yh, zmin, zmax = _self_filter_bounds
+    x, y, z = pc[:, 0], pc[:, 1], pc[:, 2]
+    keep = ~((np.abs(x) < xh) & (np.abs(y) < yh) & (z > zmin) & (z < zmax))
+    return pc[keep]
+
+
+def publish():
+    """主循环每物理步调用一次, 内部按各自频率节流"""
+    global _last_pose_pub, _last_pc_pub, _last_img_pub, _last_imu_pub
+    global _pc_diag_count, _img_diag_count, _imu_diag_count
+
+    now = time.time()
+
+    # ---- pose @ pose_rate (默认 50Hz) ----
+    # 仿真中 odin1_base_link ≡ body link, 与真机几何不完全一致但拓扑对齐;
+    # k02_nav 静态 TF (odin1_base_link→base_footprint, z=-0.5162) 让
+    # base_footprint 落在地面附近 (Spot body 站立 z≈0.5m).
+    if now - _last_pose_pub >= _pose_dt:
+        mat = get_pose()
+        if mat is not None:
+            x, y, z = mat[0, 3], mat[1, 3], mat[2, 3]
+            qx, qy, qz, qw = mat_to_quat(mat[:3, :3])
+            bridge.send_pose(
+                x, y, z,
+                qx, qy, qz, qw,
+                vx=float(cmd[0]),
+                vy=float(cmd[1]),
+                wz=float(cmd[2]),
+                timestamp=now,
+            )
+        _last_pose_pub = now
+
+    # ---- pointcloud @ pointcloud_rate (默认 5Hz) ----
+    # frame_id="lidar1" (lidar local frame), 由 bridge_node 静态 TF
+    # odin1_base_link → lidar1 [0,0,0.8] 表达物理位置.
+    # k02_nav pointcloud_to_laserscan target_frame=odin1_base_link 通过 TF 自动转换.
+    if suite is not None and now - _last_pc_pub >= _pc_dt:
+        try:
+            lidar_data = suite.get_data_by_type("lidar")
+            for name, sd in lidar_data.items():
+                if "error" in sd:
+                    continue
+                pc = sd.get("point_cloud")
+                if pc is not None and len(pc) > 0:
+                    n_raw = len(pc)
+                    pc = _apply_lidar_self_filter(pc)
+                    if len(pc) == 0:
+                        continue
+                    bridge.send_pointcloud(pc, frame_id="lidar1",
+                                           timestamp=now)
+                    _pc_diag_count += 1
+                    if _pc_diag_count <= 3 or _pc_diag_count % 50 == 0:
+                        n_drop = n_raw - len(pc)
+                        print(f"[PUB] pointcloud #{_pc_diag_count}: "
+                              f"sensor='{name}', n_points={len(pc)} "
+                              f"(self_filter dropped {n_drop}/{n_raw})")
+                    break  # 只发第一台 lidar
+        except Exception as e:
+            print("[PUB WARN] lidar:", e)
+        _last_pc_pub = now
+
+    # ---- image @ image_rate (默认 10Hz) ----
+    # frame_id="camera1", 由 bridge_node 静态 TF 连到 odin1_base_link.
+    # (k02_nav 实际不通过 TF 转换 image, 此 frame_id 仅用于 RViz 显示)
+    if suite is not None and now - _last_img_pub >= _img_dt:
+        try:
+            cam_data = suite.get_data_by_type("camera")
+            for name, sd in cam_data.items():
+                if "error" in sd:
+                    continue
+                rgb = sd.get("rgb")
+                if rgb is not None and rgb.size > 0:
+                    bridge.send_image(rgb, frame_id="camera1",
+                                      quality=_img_quality, timestamp=now)
+                    _img_diag_count += 1
+                    if _img_diag_count <= 3 or _img_diag_count % 100 == 0:
+                        print(f"[PUB] image #{_img_diag_count}: "
+                              f"sensor='{name}', shape={rgb.shape}")
+                    break
+        except Exception as e:
+            print("[PUB WARN] camera:", e)
+        _last_img_pub = now
+
+    # ---- imu @ imu_rate (默认 50Hz) ----
+    # 真机 frame_id="imu_link" (host_sdk_sample.h:249).
+    # 由 bridge_node 静态 TF odin1_base_link → imu_link [0,0,0.5] 表达 rimu 安装位置.
+    if suite is not None and now - _last_imu_pub >= _imu_dt:
+        try:
+            imu_data = suite.get_data_by_type("imu")
+            for name, sd in imu_data.items():
+                if "error" in sd:
+                    continue
+                lin_acc = sd.get("lin_acc")
+                ang_vel = sd.get("ang_vel")
+                if lin_acc is not None and ang_vel is not None:
+                    bridge.send_imu(
+                        lin_acc, ang_vel,
+                        orientation=sd.get("orientation"),
+                        frame_id="imu_link",
+                        timestamp=now,
+                    )
+                    _imu_diag_count += 1
+                    if _imu_diag_count <= 3 or _imu_diag_count % 500 == 0:
+                        print(f"[PUB] imu #{_imu_diag_count}: "
+                              f"sensor='{name}', |a|={float(np.linalg.norm(lin_acc)):.2f}, "
+                              f"|w|={float(np.linalg.norm(ang_vel)):.3f}")
+                    break
+        except Exception as e:
+            print("[PUB WARN] imu:", e)
+        _last_imu_pub = now
+
+
+# =========================================================
+# 14. main
+# =========================================================
+def main():
+
+    bridge.start()
+
+    # reset first
+    world.reset()
+
+    # robot init after reset
+    robot.initialize()
+
+    # sensors init after physics exists
+    if suite:
+        suite.initialize()
+
+    setup_keyboard()
+    set_camera_static()
+
+    # 预热几帧（修 RTX LiDAR）
+    for _ in range(30):
+        simulation_app.update()
+
+    # callback after everything ready
+    def on_physics_step(step_size):
+
+        try:
+            update_keyboard()
+            robot.forward(step_size, cmd)
+            publish()
+
+        except Exception as e:
+            print("[STEP WARN]", e)
+
+    world.add_physics_callback("policy", on_physics_step)
+
+    # play timeline
+    timeline = omni.timeline.get_timeline_interface()
+    timeline.play()
+    world.play()
+
+    print("=" * 60)
+    print("[RUNNING]")
+    print("WASD  move")
+    print("Q/E   yaw")
+    print("R     reset robot at current (x,y,yaw)")
+    print("=" * 60)
+
+    last_diag = time.time()
+
+    while simulation_app.is_running():
+
+        try:
+            world.step(render=True)
+            update_follow_camera()
+
+        except Exception as e:
+            print("[LOOP WARN]", e)
+
+        if time.time() - last_diag > 5:
+            print(
+                f"[diag] cmd={cmd.round(2)} play={world.is_playing()}"
+            )
+            last_diag = time.time()
+
+
+# =========================================================
+# 15. shutdown
+# =========================================================
+try:
+    main()
+
+except KeyboardInterrupt:
+    print("Ctrl+C")
+
+finally:
+    try:
+        bridge.stop()
+    except Exception:
+        pass
+
+    simulation_app.close()
+    print("[EXIT]")

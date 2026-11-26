@@ -1,0 +1,13 @@
+# 履带车 K02 (kinematic_car) sim_bridge 静态 TF 偏移
+#
+# base_link 是履带车几何中心, 距地 0.20m.
+# 与 r2s2r/configs/calibration/kinematic_car/sensor_suite.yaml 保持一致:
+#   ref_imu (imu_center) mount.translation = [0, 0, 0]      → imu 与 base_link 同高
+#   lidar1.extrinsics.translation = [0, 0, 0.30]            → lidar 在 base_link 上方 0.30m
+#   camera1.extrinsics.translation = [0.3, 0, 0.10]         → camera 在 base_link 前方 0.3m, 上方 0.10m
+# 推论: lidar 离地 = base_height + sensor_base_offset.z = 0.20 + 0.30 = 0.50m, 与真机 K02 一致.
+
+base_height: 0.20
+sensor_base_offset_xyz: [0.0, 0.0, 0.30]
+camera_offset_xyz: [0.3, 0.0, 0.10]
+imu_offset_xyz: [0.0, 0.0, 0.0]

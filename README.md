@@ -1,132 +1,263 @@
-# MT Real2Sim Tutorial
+English | [简体中文](README.zh-CN.md)
 
-<p align="center">
-  <img src="asset/display/mt_r2st_logo.jpg" alt="Real2Sim Tutorial Logo" height="80">
-</p>
+# Isaac Navigation Sim
 
-<p align="center">
-  <img src="asset/display/mt_r2s.gif" alt="Real2Sim Tutorial — Isaac Sim + ROS1 navigation demo" width="100%">
-</p>
+An Isaac Sim 5.1 simulation ↔ ROS1 Noetic unified navigation algorithm framework. It supports three robot types for simulation testing and real-robot deployment validation of navigation algorithms.
 
-[简体中文](README_cn.md)
+## Features
 
-Unified simulation ↔ real-robot algorithm framework built on Isaac Sim 5.1 and ROS1 Noetic. Simulation and physical deployment share the same ROS1 interfaces and algorithm code — zero modifications needed.
+- **Three robot types**: kinematic_car (kinematic tracked vehicle), Spot, Go2
+- **One-command launch**: `./start.sh` starts the Isaac Sim + ROS1 dual-container stack automatically
+- **Zero-code switching**: switch robot types via command-line flags or configuration files
+- **Simulation to real robot**: simulation and real robot use the same ROS1 interface, so navigation algorithms deploy without modification
 
-## About Manifold Tech
-
-[Manifold Tech Ltd.](https://manifoldtech.cn) builds tools and infrastructure for spatial intelligence. We focus on 3D reconstruction, scene understanding, and embodied AI — bridging the gap between real-world capture and interactive simulation.
-
-Manifold Tech's hardware products — including the **Q9000**, **Pocket 2 / 2 Pro**, and **Odin 1** — can capture high-quality 3D models of real-world environments. These scanned scenes can be imported directly into Isaac Sim as simulation environments, enabling seamless Real-to-Sim transfer for robot navigation and autonomous exploration.
-
-## Architecture
+## System architecture
 
 ```
-┌──────────────── Host (Linux + NVIDIA Driver) ─────────────────┐
-│                                                                │
-│  Docker: Isaac Sim 5.1                                         │
-│  ┌────────────────────────────────────────┐                    │
-│  │ RL Policy (Go2)                         │                    │
-│  │ SensorSuite (RTX LiDAR + Camera + IMU)  │                    │
-│  │ TcpBridgeServer ───────────────────────────┐                │
-│  │   send: pose + pointcloud + image          │                │
-│  │   recv: cmd_vel                            │                │
-│  └────────────────────────────────────────┘   │                │
-│                                                │                │
-│              TCP localhost:9090                 │                │
-│                                                │                │
-│  Docker: ROS Noetic                            │                │
-│  ┌─────────────────────────────────────────┐   │                │
-│  │  sim_bridge    → /state_estimation      │◄──┘                │
-│  │                → /registered_scan       │                    │
-│  │                → /camera/image          │                    │
-│  │                → TF: map → sensor       │                    │
-│  │                ← /cmd_vel               │                    │
-│  │                                         │                    │
-│  │  nav_algo (C++)  terrain_analysis       │                    │
-│  │                  local_planner          │                    │
-│  │                  path_follower          │                    │
-│  │                                         │                    │
-│  │  nav_demo (Py)   teleop / auto_nav     │                    │
-│  │  RViz                                   │                    │
-│  └─────────────────────────────────────────┘                    │
-└────────────────────────────────────────────────────────────────┘
+┌──────────────── Docker containers ─────────────────┐
+│                                                    │
+│ Isaac Sim container                                │
+│  ┌────────────────────────────────────┐            │
+│  │ Robot (kinematic_car/Spot/Go2)     │            │
+│  │ SensorSuite (LiDAR + Camera + IMU) │            │
+│  │ TcpBridgeServer ──────────────────────┐         │
+│  │   send: pose + pointcloud + image  │  │         │
+│  │   recv: cmd_vel                    │  │         │
+│  └────────────────────────────────────┘  │         │
+│                                          │         │
+│                  TCP localhost:9090                │
+│                                          │         │
+│ ROS1 Noetic container                              │
+│  ┌────────────────────────────────────┐  │         │
+│  │  sim_bridge    → /state_estimation │◄─┘         │
+│  │                → /registered_scan  │            │
+│  │                → /camera/image     │            │
+│  │                → TF: map → sensor  │            │
+│  │                ← /cmd_vel          │            │
+│  │                                    │            │
+│  │  nav_algo      navigation (C++)    │            │
+│  │  nav_demo      demo/tests (Python) │            │
+│  │  RViz          visualization       │            │
+│  └────────────────────────────────────┘            │
+└────────────────────────────────────────────────────┘
 
-Real robot: replace sim_bridge with odin_driver; nav_algo + nav_demo unchanged
+Real robot: odin_driver replaces sim_bridge; nav_algo unchanged
 ```
 
-## Project Structure
+## Quick start
 
-```
-mt-real2sim-tutorial/
-├── r2s2r/                             # Isaac Sim side Python package
-│   ├── core/                          #   Simulation core modules
-│   │   ├── sensor_suite.py            #     Camera + LiDAR + IMU manager
-│   │   ├── scene_builder.py           #     USDZ environment import + collision + lighting
-│   │   ├── robot_factory.py           #     Robot factory (Go2)
-│   │   ├── go2_policy.py              #     Go2 RL policy controller
-│   │   └── perf_timer.py              #     Performance timer
-│   ├── bridge/                        #   TCP bridge (no ROS dependency)
-│   │   ├── protocol.py                #     Binary protocol (magic + msgpack)
-│   │   └── tcp_server.py              #     Non-blocking TCP server
-│   ├── configs/                       #   Simulation config + sensor calibration
-│   │   ├── config.yaml                #     Unified simulation config
-│   │   ├── go2.yaml                   #     Go2 standalone config
-│   │   └── calibration/pinhole/       #     Camera + LiDAR + IMU intrinsics/extrinsics
-│   └── run_sim.py                     #   Main entry point
-│
-├── ros1_ws/src/                       # ROS1 workspace (Docker catkin)
-│   ├── sim_bridge/                    #   TCP↔ROS1 bridge (Python)
-│   ├── nav_algo/                      #   Navigation algorithms (C++)
-│   ├── nav_demo/                      #   Demo: teleop + visualization
-│   └── odin_interfaces/               #   Real robot driver interface (placeholder)
-│
-├── docker-full/                       # Docker dual-container orchestration
-│   ├── Dockerfile.isaac               #   Isaac Sim image
-│   ├── docker-compose.yml             #   Isaac Sim + ROS1 compose
-│   └── entrypoint_isaac.sh            #   Container entrypoint
-│
-├── lidar_configs/                     # Custom LiDAR config (see docs/lidar_guide.md)
-│   ├── json/MT_MLXS.json             #   MT-MLXS profile (based on ZVISION ML-Xs)
-│   └── usd/MT_MLXS.usd              #   Converted USD file
-│
-├── tools/                             # Utility scripts
-│   ├── convert_lidar_json.py          #   LiDAR JSON → USD converter
-│   ├── ros_teleop.sh                  #   One-click bridge + teleop
-│   └── run_isaac_docker.sh            #   Run Isaac Sim inside container
-│
-├── start.sh                           # One-click start/stop script
-│
-└── docs/                              # Documentation
-    ├── user_guide.md                  #   User guide (setup + operation)
-    └── lidar_guide.md                 #   Custom LiDAR configuration guide
-```
+### Dependencies
 
-## ROS1 Interfaces
+- **OS**: Ubuntu 22.04 / 24.04
+- **GPU**: NVIDIA RTX 3070+ (>= 8 GB VRAM)
+- **Driver**: NVIDIA >= 560
+- **Docker**: docker + docker-compose-v2 + nvidia-container-toolkit
+- **Isaac Sim**: `r2s2r-isaac:5.1.0` Docker image (can be built/renamed from `nvcr.io/nvidia/isaac-sim:5.1.0`, see `docker/Dockerfile.isaac`)
 
-| Topic | Message Type | Description |
-|-------|-------------|-------------|
-| `/state_estimation` | `nav_msgs/Odometry` | Robot pose + velocity (frame: map) |
-| `/registered_scan` | `sensor_msgs/PointCloud2` | World-frame LiDAR point cloud |
-| TF: `map → sensor` | `tf/tfMessage` | Sensor coordinate transform |
-| `/cmd_vel` | `geometry_msgs/Twist` | Velocity command (linear.x/y + angular.z) |
-
-## Quick Start
-
-Prerequisites: NVIDIA driver (>=560) + Docker + nvidia-container-toolkit + [NGC account](https://ngc.nvidia.com/)
+### Launch
 
 ```bash
-# First time: NGC login
-docker login nvcr.io --username '$oauthtoken' --password <YOUR_NGC_API_KEY>
-
-# Clone
-git clone https://git.manifoldtech.cn/Ethan/mt-real2sim-tutorial.git
-cd mt-real2sim-tutorial
-
-# One-click launch
+# 1. Default launch (kinematic_car)
 ./start.sh
 
-# Stop
+# 2. Launch the Spot robot
+./start.sh --robot spot
+
+# 3. Launch the Go2 robot
+./start.sh --robot go2
+
+# 4. Specify the scene directory
+./start.sh --scene /path/to/dataset
+
+# 5. Stop
 ./start.sh --stop
 ```
 
-For detailed instructions see [docs/user_guide.md](docs/user_guide.md).
+### First launch
+
+The first launch requires:
+1. Pulling the ROS Docker image (about 2 GB)
+2. Building the ROS workspace (about 1-2 minutes)
+3. Isaac Sim compiling shaders (about 5-10 minutes the first time)
+
+Using a large timeout for the first run is recommended:
+```bash
+MAX_WAIT=1800 ./start.sh
+```
+
+Subsequent launches take about 30-60 seconds.
+
+## ONS2 navigation integration
+
+The simulator can run the ONS2 navigation stack directly through `sim_bridge` (ROS1) and `sim_bridge_ros2` (ROS2);
+topics and TF contracts are identical to the real robot. **The single source of truth for usage documentation** is in the ONS2 repository:
+[04 · Simulation](../Odin-Nav-Stack2/docs/simulation/04_simulation.zh-CN.md).
+
+```bash
+./start.sh --robot go2 --runtime ros2 --stack ons2 --map office_0923_sim
+```
+
+Integration assets (maps, waypoints, smoke tooling) are in [`integrations/ons2/`](integrations/ons2/README.md);
+topic/TF contracts are in [`docs/simulation-interface.md`](docs/simulation-interface.md).
+The full flow from Q9000 scanning and the XAI export through USDZ/map generation to ONS2 navigation is described in
+[`docs/Use the ONS2 and simulator manual.md`](docs/Use%20the%20ONS2%20and%20simulator%20manual.md).
+
+ONS2 also requires: the Go2 simulation profile/launch from the navigation repository, the USDZ/PGM/waypoint assets exported per the tutorial,
+and a locally built `isaac_nav_ros2` image. See the navigation repository simulation guide for the profile and startup details.
+
+## Robot types
+
+| Type | Purpose | Characteristics |
+|------|---------|-----------------|
+| **kinematic_car** | Navigation algorithm validation | Pure kinematic model, no physics simulation, fast iteration |
+| **spot** | Boston Dynamics Spot | RL gait policy, physics simulation |
+| **go2** | Unitree Go2 | RL gait policy, physics simulation |
+
+**Recommendation**: for navigation algorithm development, prefer `kinematic_car`, and migrate to `spot` or `go2` after debugging is complete.
+
+## ROS1 interface
+
+| Topic | Message type | Description |
+|-------|--------------|-------------|
+| `/state_estimation` | `nav_msgs/Odometry` | Robot pose + velocity (frame: map) |
+| `/registered_scan` | `sensor_msgs/PointCloud2` | LiDAR point cloud in the world frame |
+| `/camera/image` | `sensor_msgs/Image` | Camera image (JPEG compressed) |
+| TF: `map → base_link → sensor` | `tf/tfMessage` | Coordinate transforms |
+| `/cmd_vel` | `geometry_msgs/Twist` | Velocity command (linear.x/y + angular.z) |
+
+## Project structure
+
+```
+isaac_navigation_sim/
+├── r2s2r/                       # Isaac Sim simulation core
+│   ├── core/                    #   robots, sensors, scene
+│   │   ├── kinematic_vehicle.py #     kinematic vehicle
+│   │   ├── robot_factory.py     #     robot factory
+│   │   ├── sensor_suite.py      #     sensor suite
+│   │   └── ...
+│   ├── bridge/                  #   TCP bridge (no ROS dependency)
+│   ├── configs/                 #   configurations + calibration
+│   └── run_sim.py               #   main entry point
+│
+├── ros1_ws/src/                 # ROS1 workspace
+│   ├── sim_bridge/              #   TCP↔ROS1 bridge
+│   ├── nav_algo/                #   navigation algorithms (C++)
+│   ├── nav_demo/                #   demo/tests (Python)
+│   └── odin_interfaces/         #   real-robot interface placeholder
+│
+├── docker/                      # Docker configuration
+│   ├── docker-compose.yml       #   dual-container orchestration
+│   └── Dockerfile.ros1          #   ROS1 image
+│
+├── tools/                       # utility scripts
+└── start.sh                     # one-command launch script
+```
+
+## Configuration files
+
+Main configuration file: `r2s2r/configs/config.yaml`
+
+```yaml
+# Robot type (can also be overridden by start.sh --robot)
+quadruped:
+  robot_type: "kinematic_car"  # kinematic_car | spot | go2
+
+# Scene
+scene:
+  environment:
+    usdz_path: "/dataset/tunnel1.usdz"
+
+# Sensor calibration (adapted automatically according to robot_type)
+sensor_suite:
+  calibration_dir: "calibration/kinematic_car"  # or pinhole, odin1
+```
+
+## Real-robot deployment
+
+Navigation algorithms validated in simulation can be deployed directly to the real robot:
+
+```bash
+# On the real robot (Ubuntu 20.04 + ROS Noetic)
+roslaunch odin_interfaces driver.launch  # replaces sim_bridge
+roslaunch nav_algo navigation.launch     # the same navigation algorithms
+```
+
+The ROS interface is fully compatible; no code changes are needed.
+
+## Troubleshooting
+
+### Container launch failure
+
+```bash
+# Check Docker
+docker info
+groups | grep docker
+
+# Check the GPU
+nvidia-smi
+docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi
+
+# Check the images
+docker images | grep isaac
+```
+
+### Isaac Sim startup timeout
+
+The first launch needs to compile shaders (5-10 minutes):
+```bash
+MAX_WAIT=1800 ./start.sh
+```
+
+View the Isaac Sim logs:
+```bash
+docker logs isaac_nav_isaac
+```
+
+### No data on ROS topics
+
+Check the bridge log:
+```bash
+docker exec isaac_nav_ros1 cat /tmp/bridge.log
+```
+
+Test the bridge manually:
+```bash
+docker exec -it isaac_nav_ros1 bash
+source /catkin_ws/devel/setup.bash
+rostopic list
+rostopic hz /registered_scan
+```
+
+## Development
+
+### Adding a new navigation algorithm
+
+1. Create a new ROS package under `ros1_ws/src/`
+2. Subscribe to `/state_estimation` and `/registered_scan`
+3. Publish `/cmd_vel`
+4. Test in simulation
+
+### Modifying sensor configuration
+
+Edit the calibration files under `r2s2r/configs/calibration/<robot_type>/`.
+
+### Debugging
+
+```bash
+# Enter the Isaac Sim container
+docker exec -it isaac_nav_isaac bash
+
+# Enter the ROS container
+docker exec -it isaac_nav_ros1 bash
+source /catkin_ws/devel/setup.bash
+```
+
+## License
+
+Based on a fusion of tunnel-inspection-v2 and MT-Real2Sim-Tutorial.
+
+
+## Simulation updates
+
+Go2 MoE-CTS + PI, ODIN1 calibration, synchronized lidar/ROS simulation time,
+and diagnostics are described in [docs/simulation_updates.md](docs/simulation_updates.md).

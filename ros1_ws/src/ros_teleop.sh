@@ -1,19 +1,19 @@
 #!/bin/bash
-# ros_teleop.sh — Start bridge + teleop keyboard simultaneously inside Docker container
+# ros_teleop.sh — 在 Docker 容器内同时启动 bridge + teleop keyboard
 #
-# Usage (host):
+# 用法 (宿主机):
 #   docker exec -it real2sim2real_ros1 bash /catkin_ws/src/../tools/ros_teleop.sh
-#   or:
-#   ./tools/ros_teleop.sh          # Auto docker exec
+#   或:
+#   ./tools/ros_teleop.sh          # 自动 docker exec
 #
-# Flow:
-#   1. Start roscore + sim_bridge in background (TCP bridge)
-#   2. Start teleop_keyboard in foreground (keyboard teleoperation)
-#   3. Auto-cleanup background processes on Ctrl+C
+# 流程:
+#   1. 后台启动 roscore + sim_bridge (TCP 桥接)
+#   2. 前台启动 teleop_keyboard (键盘遥操作)
+#   3. Ctrl+C 退出 teleop 时自动清理后台进程
 
 set -e
 
-# Detect if running inside Docker container
+# 检测是否在 Docker 容器内
 if [ ! -f /catkin_ws/devel/setup.bash ]; then
     echo "[ros_teleop] Not inside Docker container. Launching via docker exec..."
     exec docker exec -it real2sim2real_ros1 bash -c "source /catkin_ws/devel/setup.bash && bash /catkin_ws/src/../tools/ros_teleop.sh"
@@ -26,34 +26,34 @@ echo "============================================"
 echo "  ROS1 Teleop: bridge + keyboard control"
 echo "============================================"
 
-# Cleanup function
+# 清理函数
 cleanup() {
     echo ""
     echo "[ros_teleop] Shutting down..."
-    # Kill background roslaunch
+    # 杀掉后台 roslaunch
     if [ -n "$BRIDGE_PID" ]; then
         kill $BRIDGE_PID 2>/dev/null
         wait $BRIDGE_PID 2>/dev/null
     fi
-    # Kill roscore
+    # 杀掉 roscore
     killall -q roscore rosmaster rosout 2>/dev/null || true
     echo "[ros_teleop] Done."
 }
 trap cleanup EXIT
 
-# 1. Start roscore
+# 1. 启动 roscore
 echo "[ros_teleop] Starting roscore..."
 roscore &
 ROSCORE_PID=$!
 sleep 2
 
-# 2. Start bridge in background
+# 2. 后台启动 bridge
 echo "[ros_teleop] Starting sim_bridge (background)..."
 roslaunch sim_bridge bridge.launch --wait &
 BRIDGE_PID=$!
 sleep 2
 
-# 3. Start teleop in foreground
+# 3. 前台启动 teleop
 echo "[ros_teleop] Starting keyboard teleop (foreground)..."
 echo "[ros_teleop] Press WASD/QE to control, Space=stop, Ctrl+C=quit"
 echo ""

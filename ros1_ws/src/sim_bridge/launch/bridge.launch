@@ -2,10 +2,15 @@
   <!-- TCP Bridge: Isaac Sim → ROS1 -->
   <arg name="tcp_host" default="localhost"/>
   <arg name="tcp_port" default="9090"/>
+  <arg name="tf_profile" default="odin1"/>
+  <arg name="frame_layout" default="legacy"/>
+  <!-- Set before starting consumers; Isaac and the bridge must use the same clock. -->
+  <param name="/use_sim_time" value="true"/>
 
   <node pkg="sim_bridge" type="bridge_node.py" name="sim_bridge" output="screen">
     <param name="tcp_host" value="$(arg tcp_host)"/>
     <param name="tcp_port" value="$(arg tcp_port)"/>
     <param name="reconnect_interval" value="2.0"/>
+    <rosparam command="load" file="$(find sim_bridge)/config/tf_$(arg tf_profile).yaml"/>
   </node>
 </launch>

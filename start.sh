@@ -1,204 +1,306 @@
 #!/bin/bash
-# start.sh — One-click launch for Isaac Real2Sim2Real Go2
+# start.sh — Isaac Navigation Sim 一键启动脚本
 #
-# Usage:
-#   ./start.sh                          # Start all (Isaac Sim + ROS + RViz + Teleop)
-#   ./start.sh --stop                   # Stop all containers
-#   ./start.sh --scene ~/my_scenes      # Specify scene file directory
+# 用法:
+#   ./start.sh                          # 启动 (默认 kinematic_car)
+#   ./start.sh --robot spot             # 启动 spot
+#   ./start.sh --robot go2              # 启动 go2
+#   ./start.sh --robot kinematic_car    # 显式指定 kinematic_car
+#   ./start.sh --scene /path/to/scene   # 指定场景目录
+#   ./start.sh --stop                   # 停止所有容器
+#   ./start.sh --help                   # 帮助
 #
-# Flow:
-#   1. Pre-flight checks (Docker, GPU, NGC)
-#   2. Start dual containers (Isaac Sim + ROS1)
-#   3. Wait for Isaac Sim ready (TCP:9090)
-#   4. Start RViz (background)
-#   5. Start teleop (foreground, WASD control)
-#   6. Auto-cleanup on Ctrl+C
+# 流程:
+#   1. Pre-flight 检查 (Docker, GPU, 镜像, 场景)
+#   2. 启动双容器 (Isaac Sim + ROS1)
+#   3. 等待 Isaac Sim 就绪 (TCP:9090)
+#   4. 启动 ROS 节点 (roscore + bridge + RViz + teleop)
+#   5. Ctrl+C 自动清理
 
 set -e
 
-# ── Project root ──
+# ── 项目配置 ──
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$SCRIPT_DIR"
-COMPOSE_FILE="$PROJECT_DIR/docker-full/docker-compose.yml"
-ROS_CONTAINER="r2s2r_ros1"
-ISAAC_CONTAINER="r2s2r_isaac"
-SCENE_DIR="${SCENE_DIR:-$HOME/dataset/isaac}"
+COMPOSE_FILE="$PROJECT_DIR/docker/docker-compose.yml"
+ISAAC_CONTAINER="isaac_nav_isaac"
+ROS_CONTAINER="isaac_nav_ros1"
+DATASET_DIR="${DATASET_DIR:-$PROJECT_DIR/dataset}"
+SIM_CONFIG="${SIM_CONFIG:-}"
 TCP_PORT=9090
-# First launch pulls ~20GB image + compiles shaders; override with MAX_WAIT env var
 MAX_WAIT="${MAX_WAIT:-600}"
-LOG_DIR="${LOG_DIR:-/tmp/r2s2r}"
+LOG_DIR="${LOG_DIR:-/tmp/isaac_nav_sim}"
 mkdir -p "$LOG_DIR"
 
-# ── Colored output ──
+# ── 颜色输出 ──
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 info()  { echo -e "${CYAN}[start]${NC} $*"; }
 ok()    { echo -e "${GREEN}[start]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[start]${NC} $*"; }
 err()   { echo -e "${RED}[start] ERROR:${NC} $*" >&2; }
 
-# ── Argument parsing ──
+# ── 参数解析 ──
 ACTION="start"
+ROBOT_TYPE=""
+SCENE_PATH=""
+RUNTIME=""
+STACK="none"
+MAP_NAME="office_0923_sim"
+ONS2_ROOT="${ONS2_ROOT:-$PROJECT_DIR/../Odin-Nav-Stack2}"
+ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-77}"
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --stop)
             ACTION="stop"
             shift
             ;;
+        --robot)
+            ROBOT_TYPE="$2"
+            shift 2
+            ;;
+        --runtime)
+            RUNTIME="$2"
+            shift 2
+            ;;
+        --stack)
+            STACK="$2"
+            shift 2
+            ;;
+        --map)
+            MAP_NAME="$2"
+            shift 2
+            ;;
+        --ons2-root)
+            ONS2_ROOT="$2"
+            shift 2
+            ;;
         --scene)
-            SCENE_DIR="$2"
+            DATASET_DIR="$2"
             shift 2
             ;;
         -h|--help)
-            echo "Usage: ./start.sh [options]"
+            echo "Isaac Navigation Sim - 一键启动脚本"
             echo ""
-            echo "Options:"
-            echo "  --stop            Stop all containers"
-            echo "  --scene <dir>     Specify scene file directory (default: ~/dataset/isaac)"
-            echo "  -h, --help        Show this help"
+            echo "用法: ./start.sh [选项]"
+            echo ""
+            echo "选项:"
+            echo "  --robot <type>    指定机器人类型: kinematic_car | spot | go2"
+            echo "                    (默认: kinematic_car, 或使用 config.yaml 中的配置)"
+            echo "  --scene <dir>     指定场景文件目录"
+            echo "  --runtime <r>     ros1 | ros2（--stack ons2 时必填）"
+            echo "  --stack <s>       none | ons2（默认 none，保持原有流程）"
+            echo "  --map <name>      ONS2 地图名（默认 office_0923_sim）"
+            echo "  --ons2-root <p>   ONS2 仓库路径（默认 ../Odin-Nav-Stack2）"
+            echo "  --stop            停止所有容器"
+            echo "  -h, --help        显示此帮助"
+            echo ""
+            echo "示例:"
+            echo "  ./start.sh                           # 默认启动"
+            echo "  ./start.sh --robot spot              # 启动 Spot 机器人"
+            echo "  ./start.sh --robot kinematic_car     # 启动运动学履带车"
+            echo "  ./start.sh --stop                    # 停止"
             exit 0
             ;;
         *)
-            err "Unknown argument: $1"
+            err "未知参数: $1"
+            echo "运行 './start.sh --help' 查看帮助"
             exit 1
             ;;
     esac
 done
 
-# ── Stop ──
+# ── 校验运行时/栈参数 ──
+if [ "$STACK" != "none" ] && [ "$STACK" != "ons2" ]; then
+    err "无效的 stack: $STACK（支持 none | ons2）"
+    exit 1
+fi
+if [ "$STACK" = "ons2" ] && [ -z "$ROBOT_TYPE" ]; then
+    ROBOT_TYPE=go2
+fi
+if [ -z "$SIM_CONFIG" ]; then
+    if [ "$STACK" = "ons2" ] && [ "$ROBOT_TYPE" = "go2" ]; then
+        SIM_CONFIG="r2s2r/configs/go2_office_0923.yaml"
+    else
+        SIM_CONFIG="r2s2r/configs/config.yaml"
+    fi
+fi
+if [ "$STACK" = "ons2" ]; then
+    if [[ "$RUNTIME" != "ros1" && "$RUNTIME" != "ros2" ]]; then
+        err "--stack ons2 需要 --runtime ros1|ros2"
+        exit 1
+    fi
+    ONS2_ROOT="$(cd "$ONS2_ROOT" 2>/dev/null && pwd)" || {
+        err "ONS2_ROOT 不存在: $ONS2_ROOT"
+        err "先克隆 Odin-Nav-Stack2，或传 --ons2-root <path>"
+        exit 1
+    }
+    MAP_YAML_HOST=""
+    if [ ! -f "$PROJECT_DIR/integrations/ons2/maps/${MAP_NAME}.yaml" ]; then
+        err "缺少地图: $PROJECT_DIR/integrations/ons2/maps/${MAP_NAME}.yaml"
+        exit 1
+    fi
+fi
+
+# ── 停止 ──
 if [ "$ACTION" = "stop" ]; then
-    info "Stopping containers..."
+    info "停止容器..."
     if ! docker info &>/dev/null; then
-        err "Cannot access Docker (not running or current user lacks permission)"
-        err "  Verify: systemctl is-active docker; groups | grep -w docker"
+        err "无法访问 Docker (未运行或当前用户缺少权限)"
+        err "  验证: systemctl is-active docker; groups | grep -w docker"
         exit 1
     fi
     docker compose -f "$COMPOSE_FILE" down
-    ok "Stopped"
+    ok "已停止"
     exit 0
 fi
 
 # ══════════════════════════════════════
-#  Pre-flight checks
+#  Pre-flight 检查
 # ══════════════════════════════════════
 
-info "Running pre-flight checks..."
+info "运行 Pre-flight 检查..."
 
 # Docker
 if ! command -v docker &>/dev/null; then
-    err "Docker not found. Install: sudo apt-get install docker.io docker-compose-v2"
+    err "未找到 Docker. 安装: sudo apt-get install docker.io docker-compose-v2"
     exit 1
 fi
 
 if ! docker info &>/dev/null; then
-    # Distinguish: service not running vs permission denied
     if ! systemctl is-active --quiet docker 2>/dev/null; then
-        err "Docker service not running. Run: sudo systemctl start docker"
+        err "Docker 服务未运行. 运行: sudo systemctl start docker"
     elif ! groups | grep -qw docker; then
-        err "Current user is not in the docker group. Run:"
+        err "当前用户不在 docker 组中. 运行:"
         err "  sudo usermod -aG docker \$USER"
-        err "  Then log out and back in, or run: newgrp docker"
+        err "  然后注销并重新登录, 或运行: newgrp docker"
     else
-        err "Cannot access Docker. Run 'docker info' for details"
+        err "无法访问 Docker. 运行 'docker info' 查看详情"
     fi
     exit 1
 fi
 
 # GPU
 if ! command -v nvidia-smi &>/dev/null; then
-    err "nvidia-smi not found. Install NVIDIA driver (>= 560)"
+    err "未找到 nvidia-smi. 安装 NVIDIA 驱动 (>= 560)"
     exit 1
 fi
 
 if ! nvidia-smi &>/dev/null; then
-    err "GPU driver error. Run nvidia-smi to check"
+    err "GPU 驱动错误. 运行 nvidia-smi 检查"
     exit 1
 fi
 
 # nvidia-container-toolkit
 if ! docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi &>/dev/null 2>&1; then
-    warn "Docker GPU passthrough test failed. Ensure nvidia-container-toolkit is installed:"
+    warn "Docker GPU 透传测试失败. 确保已安装 nvidia-container-toolkit:"
     warn "  sudo apt-get install nvidia-container-toolkit"
     warn "  sudo nvidia-ctk runtime configure --runtime=docker"
     warn "  sudo systemctl restart docker"
-    # Don't exit; let user decide whether to continue
 fi
 
-# NGC login check (try real access first, fall back to config.json grep)
-NGC_OK=0
-if docker manifest inspect nvcr.io/nvidia/isaac-sim:5.1.0 &>/dev/null; then
-    NGC_OK=1
-elif grep -q "nvcr.io" ~/.docker/config.json 2>/dev/null; then
-    # config.json contains nvcr.io (may be credential helper) — treat as logged in
-    NGC_OK=1
+# Isaac Sim 镜像
+if ! docker images | grep -qE "r2s2r-isaac|isaacsim51-r2s2r"; then
+    err "未找到 Isaac Sim 镜像: r2s2r-isaac:5.1.0（或 isaacsim51-r2s2r:latest）"
+    err "请按 docs/end-to-end-scan-to-ons2.md 或 docker/Dockerfile.isaac 构建/加载镜像"
+    exit 1
 fi
-if [ "$NGC_OK" -eq 0 ]; then
-    warn "NGC login not detected (or local isaac-sim:5.1.0 image not found). First run requires login:"
-    warn "  1. Register NGC account: https://ngc.nvidia.com/"
-    warn "  2. Generate API Key: NGC website → Setup → API Key"
-    warn "  3. Run: docker login nvcr.io --username '\$oauthtoken' --password <YOUR_KEY>"
+
+# 场景文件
+if [ ! -d "$DATASET_DIR" ]; then
+    warn "场景目录不存在: $DATASET_DIR"
+    warn "仿真将使用默认空白地面. 请从项目文档获取场景文件"
     echo ""
-    read -p "Continue anyway? (y/N) " -n 1 -r
-    echo ""
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+fi
+
+# 验证机器人类型
+if [ -n "$ROBOT_TYPE" ]; then
+    if [[ ! "$ROBOT_TYPE" =~ ^(kinematic_car|spot|go2)$ ]]; then
+        err "无效的机器人类型: $ROBOT_TYPE"
+        err "支持的类型: kinematic_car, spot, go2"
         exit 1
     fi
+    info "机器人类型: $ROBOT_TYPE (通过参数指定)"
+else
+    info "机器人类型: 使用 config.yaml 中的配置"
 fi
 
-# Scene files
-if [ ! -d "$SCENE_DIR" ]; then
-    warn "Scene directory does not exist: $SCENE_DIR"
-    warn "Simulation will use default blank ground. Obtain scene files from team documentation."
-    echo ""
-fi
-
-ok "Pre-flight checks passed"
+ok "Pre-flight 检查通过"
 
 # ══════════════════════════════════════
-#  Cleanup function
+#  清理函数
 # ══════════════════════════════════════
 
 cleanup() {
     echo ""
-    info "Shutting down..."
+    info "正在关闭..."
 
-    # Kill ROS processes inside container (RViz/roscore/bridge all run there)
+    # 停止 ROS 进程
     docker exec "$ROS_CONTAINER" bash -c \
         "killall -q rviz roscore rosmaster rosout roslaunch 2>/dev/null; true" 2>/dev/null || true
 
-    # Stop containers
+    # 停止容器
     docker compose -f "$COMPOSE_FILE" down 2>/dev/null || true
 
-    ok "Stopped. Goodbye!"
+    ok "已停止. 再见!"
 }
 trap cleanup EXIT
 
 # ══════════════════════════════════════
-#  Start containers
+#  启动容器
 # ══════════════════════════════════════
 
-info "Starting containers (Isaac Sim + ROS1)..."
+info "启动容器 (Isaac Sim + ROS1)..."
 xhost +local:docker >/dev/null 2>&1 || true
-SCENE_DIR="$SCENE_DIR" docker compose -f "$COMPOSE_FILE" up -d
 
-# ══════════════════════════════════════
-#  Wait for Isaac Sim ready
-# ══════════════════════════════════════
+# 设置环境变量
+export DATASET_DIR
+export ROBOT_TYPE
+export SCENE_PATH
+export DISPLAY
+export SIM_CONFIG
+export ONS2_ROOT
+export ROS_DOMAIN_ID
+export MAP_NAME
+export RUNTIME
 
-info "Waiting for Isaac Sim to start (listening TCP:$TCP_PORT, timeout ${MAX_WAIT}s)..."
-# Detect cold start (check if Vulkan shader cache directory is non-empty)
-# Uses the already-running isaac container, no external image needed
-CACHE_NONEMPTY=$(docker exec "$ISAAC_CONTAINER" \
-    bash -c 'ls /isaac-sim/.nv/ComputeCache 2>/dev/null | head -1' 2>/dev/null)
-if [ -z "$CACHE_NONEMPTY" ]; then
-    warn "First cold start: compiling Vulkan shaders, typically 5-10 min. Be patient, don't Ctrl+C"
-    warn "If default ${MAX_WAIT}s timeout is not enough: MAX_WAIT=1800 ./start.sh"
+if [ "$STACK" = "ons2" ] && [ "$RUNTIME" = "ros2" ]; then
+    info "启动容器 (Isaac Sim + ROS2)..."
+    if ! docker images | grep -q "isaac_nav_ros2"; then
+        info "构建 ROS2 镜像 isaac_nav_ros2:jazzy ..."
+        DATASET_DIR="$DATASET_DIR" ROBOT_TYPE="$ROBOT_TYPE" SCENE_PATH="$SCENE_PATH" \
+        SIM_CONFIG="$SIM_CONFIG" ONS2_ROOT="$ONS2_ROOT" \
+            docker compose -f "$COMPOSE_FILE" build ros2 || exit 1
+    fi
+    DATASET_DIR="$DATASET_DIR" ROBOT_TYPE="$ROBOT_TYPE" SCENE_PATH="$SCENE_PATH" \
+    SIM_CONFIG="$SIM_CONFIG" ONS2_ROOT="$ONS2_ROOT" \
+        docker compose -f "$COMPOSE_FILE" up -d --force-recreate isaac-sim ros2
 else
-    info "Shader cache found, expect 30-60 seconds to ready"
+    info "启动容器 (Isaac Sim + ROS1)..."
+    DATASET_DIR="$DATASET_DIR" ROBOT_TYPE="$ROBOT_TYPE" SCENE_PATH="$SCENE_PATH" \
+    SIM_CONFIG="$SIM_CONFIG" ONS2_ROOT="$ONS2_ROOT" \
+        docker compose -f "$COMPOSE_FILE" up -d --force-recreate isaac-sim ros1
+fi
+
+# ══════════════════════════════════════
+#  等待 Isaac Sim 就绪
+# ══════════════════════════════════════
+
+info "等待 Isaac Sim 启动 (监听 TCP:$TCP_PORT, 超时 ${MAX_WAIT}s)..."
+
+# 检测是否冷启动
+CACHE_NONEMPTY=$(docker exec "$ISAAC_CONTAINER" \
+    bash -c 'ls /isaac-sim/kit/cache 2>/dev/null | head -1' 2>/dev/null || true)
+if [ -z "$CACHE_NONEMPTY" ]; then
+    warn "首次冷启动: 正在编译 Vulkan shaders, 通常需要 5-10 分钟. 请耐心等待, 不要 Ctrl+C"
+    warn "如果默认 ${MAX_WAIT}s 超时不够: MAX_WAIT=1800 ./start.sh"
+else
+    info "发现 shader 缓存, 预计 30-60 秒就绪"
 fi
 
 WAITED=0
@@ -206,57 +308,109 @@ while ! ss -tlnp 2>/dev/null | grep -q ":${TCP_PORT} " && [ "$WAITED" -lt "$MAX_
     sleep 3
     WAITED=$((WAITED + 3))
     if [ $((WAITED % 15)) -eq 0 ]; then
-        info "Waited ${WAITED}s / ${MAX_WAIT}s ..."
+        info "已等待 ${WAITED}s / ${MAX_WAIT}s ..."
     fi
 done
 
 if [ "$WAITED" -ge "$MAX_WAIT" ]; then
-    err "Timed out waiting for Isaac Sim (${MAX_WAIT}s). Check:"
+    err "等待 Isaac Sim 超时 (${MAX_WAIT}s). 检查:"
     err "  docker logs $ISAAC_CONTAINER"
-    err "If first launch is still pulling images, increase timeout: MAX_WAIT=1800 ./start.sh"
+    err "如果首次启动仍在拉取镜像, 增加超时: MAX_WAIT=1800 ./start.sh"
     exit 1
 fi
 
-ok "Isaac Sim TCP port is open ($TCP_PORT)"
+ok "Isaac Sim TCP 端口已开放 ($TCP_PORT)"
 
-# ── Wait for Isaac Sim simulation loop to be running ──
-info "Waiting for Isaac Sim to initialize (checking container logs)..."
-info ">>> Click the PLAY button in the Isaac Sim window when it appears <<<"
+# 等待 Isaac Sim 仿真循环运行
+info "等待 Isaac Sim 初始化 (检查容器日志)..."
+info ">>> 当 Isaac Sim 窗口出现时, 点击 PLAY 按钮 <<<"
 DATA_WAIT=0
 DATA_MAX_WAIT=300
 while [ "$DATA_WAIT" -lt "$DATA_MAX_WAIT" ]; do
-    # Check Isaac container logs for diagnostic output (printed every 5s in main loop)
-    if docker logs "$ISAAC_CONTAINER" 2>&1 | grep -q "\[diag\]"; then
+    # 检查 Isaac 容器日志中的诊断输出
+    if docker logs "$ISAAC_CONTAINER" 2>&1 | grep -q "\[diag\]\|\[run_sim\].*TCP"; then
         break
     fi
     sleep 3
     DATA_WAIT=$((DATA_WAIT + 3))
     if [ $((DATA_WAIT % 15)) -eq 0 ]; then
-        # Show latest status from Isaac logs
-        LAST_LINE=$(docker logs "$ISAAC_CONTAINER" 2>&1 | grep "\[run_sim\]\|\[diag\]" | tail -1)
-        info "Waiting ${DATA_WAIT}s... last Isaac log: ${LAST_LINE:-<initializing>}"
+        LAST_LINE=$(docker logs "$ISAAC_CONTAINER" 2>&1 | grep -E "\[run_sim\]|\[diag\]|\[config\]" | tail -1)
+        info "等待 ${DATA_WAIT}s... 最新 Isaac 日志: ${LAST_LINE:-<初始化中>}"
     fi
 done
 
 if [ "$DATA_WAIT" -ge "$DATA_MAX_WAIT" ]; then
-    warn "Timed out waiting for Isaac Sim to enter main loop (${DATA_MAX_WAIT}s)"
-    warn "Continuing anyway — bridge will auto-reconnect when ready"
+    warn "等待 Isaac Sim 进入主循环超时 (${DATA_MAX_WAIT}s)"
+    warn "继续执行 — bridge 会在就绪时自动重连"
 fi
 
-ok "Isaac Sim simulation loop is running"
+ok "Isaac Sim 仿真循环正在运行"
 
 # ══════════════════════════════════════
-#  Start ROS: bridge + RViz + teleop
+#  ONS2 模式 (ROS2)：bridge + 导航栈
+# ══════════════════════════════════════
+if [ "$STACK" = "ons2" ] && [ "$RUNTIME" = "ros2" ]; then
+    if ! docker exec isaac_nav_ros2 test -f /ons2/ros2_ws/install/setup.bash; then
+        err "ONS2 ROS2 工作区尚未编译: /ons2/ros2_ws/install 不存在"
+        err "先在容器内执行 colcon build（见 docs/simulation/04_simulation.md）"
+        exit 1
+    fi
+
+    info "启动 ROS2 sim_bridge ..."
+    docker exec -d isaac_nav_ros2 bash -lc \
+        "source /opt/ros/jazzy/setup.bash && \
+         source /ons2/ros2_ws/install/setup.bash && \
+         ros2 launch sim_bridge_ros2 bridge.launch.py \
+           bridge_config:=/ons2/ros2_ws/src/sim_bridge_ros2/config/go2_sim.yaml \
+           color_lut_path:=/integrations/ons2/color_luts/${MAP_NAME}.npz \
+           >/tmp/bridge.log 2>&1"
+
+    ODOM_WAIT=0
+    while [ "$ODOM_WAIT" -lt 60 ]; do
+        if docker exec isaac_nav_ros2 bash -lc \
+            "source /opt/ros/jazzy/setup.bash && source /ons2/ros2_ws/install/setup.bash && \
+             timeout 3 ros2 topic echo /odin1/odometry --once >/dev/null 2>&1"; then
+            break
+        fi
+        sleep 2
+        ODOM_WAIT=$((ODOM_WAIT + 2))
+    done
+    if [ "$ODOM_WAIT" -ge 60 ]; then
+        err "等待 /odin1/odometry 超时，查看: docker exec isaac_nav_ros2 cat /tmp/bridge.log"
+        exit 1
+    fi
+    ok "sim_bridge 已发布 /odin1/odometry (${ODOM_WAIT}s)"
+
+    info "启动 ONS2 导航栈 (ROS2, map=${MAP_NAME}) ..."
+    docker exec -d isaac_nav_ros2 bash -lc \
+        "bash /ons2/scripts/ons2_sim_ros2.sh \
+           --map /integrations/ons2/maps/${MAP_NAME}.yaml \
+           >/tmp/ons2_sim.log 2>&1"
+
+    echo ""
+    echo "============================================"
+    echo "  ONS2 仿真栈启动中"
+    echo "============================================"
+    echo "  地图: ${MAP_NAME}"
+    echo "  日志: docker exec isaac_nav_ros2 tail -f /tmp/ons2_sim.log"
+    echo "  状态: docker exec isaac_nav_ros2 bash -lc 'source /opt/ros/jazzy/setup.bash && source /ons2/ros2_ws/install/setup.bash && ros2 topic echo /waypoint_manager/status --once'"
+    echo "  航点: bash integrations/ons2/waypoints/send_waypoints.sh --runtime ros2 --scene ${MAP_NAME}"
+    echo "  Ctrl+C 停止全部"
+    echo "============================================"
+    echo ""
+
+    while true; do sleep 5; done
+fi
+
+# ══════════════════════════════════════
+#  ROS: bridge + RViz + teleop
 # ══════════════════════════════════════
 
-# Start roscore + bridge (background inside container, logs written to disk for debugging)
-# Note: in bash `cmd1 && cmd2 & cmd3` puts cmd1 && cmd2 in a subshell, breaking source;
-# therefore use ';' after source, and run roscore separately in background
-info "Starting roscore..."
+info "启动 roscore..."
 docker exec -d "$ROS_CONTAINER" bash -c \
     "source /catkin_ws/devel/setup.bash; roscore >/tmp/roscore.log 2>&1"
 
-# Wait for roscore to be ready (check port 11311 inside container via python)
+# 等待 roscore 就绪
 ROSCORE_WAIT=0
 while [ "$ROSCORE_WAIT" -lt 30 ]; do
     if docker exec "$ROS_CONTAINER" python3 -c \
@@ -267,48 +421,54 @@ while [ "$ROSCORE_WAIT" -lt 30 ]; do
     ROSCORE_WAIT=$((ROSCORE_WAIT + 1))
 done
 if [ "$ROSCORE_WAIT" -ge 30 ]; then
-    err "roscore failed to start within 30s. Check: docker exec $ROS_CONTAINER cat /tmp/roscore.log"
+    err "roscore 启动失败 (30s 内). 检查: docker exec $ROS_CONTAINER cat /tmp/roscore.log"
     exit 1
 fi
-ok "roscore ready (${ROSCORE_WAIT}s)"
+ok "roscore 就绪 (${ROSCORE_WAIT}s)"
 
-info "Starting sim_bridge (log: $LOG_DIR/bridge.log)..."
+TF_PROFILE=odin1
+if [ "$ROBOT_TYPE" = "go2" ]; then
+    TF_PROFILE=odin1_go2
+fi
+info "启动 sim_bridge (tf_profile=$TF_PROFILE, 日志: $LOG_DIR/bridge.log)..."
 docker exec -d "$ROS_CONTAINER" bash -c \
-    "source /catkin_ws/devel/setup.bash; roslaunch sim_bridge bridge.launch --wait >/tmp/bridge.log 2>&1"
+    "source /catkin_ws/devel/setup.bash; roslaunch sim_bridge bridge.launch tf_profile:=$TF_PROFILE --wait >/tmp/bridge.log 2>&1"
 sleep 3
 docker cp "$ROS_CONTAINER":/tmp/roscore.log "$LOG_DIR/roscore.log" 2>/dev/null || true
 docker cp "$ROS_CONTAINER":/tmp/bridge.log  "$LOG_DIR/bridge.log"  2>/dev/null || true
 
-# Start RViz (background in container; note: docker exec -d cannot retrieve RViz PID on host,
-# cleanup is handled uniformly by docker compose down on exit)
-info "Starting RViz..."
+info "启动 RViz..."
 docker exec -d "$ROS_CONTAINER" bash -c \
     "source /catkin_ws/devel/setup.bash; rosrun rviz rviz -d /catkin_ws/src/nav_demo/rviz/minimal.rviz >/tmp/rviz.log 2>&1"
 
 sleep 2
-ok "RViz started (if no window appears, check logs in $LOG_DIR or: docker exec $ROS_CONTAINER cat /tmp/rviz.log)"
+ok "RViz 已启动 (如果没有窗口出现, 检查日志: docker exec $ROS_CONTAINER cat /tmp/rviz.log)"
 
 # ══════════════════════════════════════
-#  Start teleop (foreground)
+#  启动 teleop (前台)
 # ══════════════════════════════════════
 
 echo ""
 echo "============================================"
-echo "  Isaac Real2Sim2Real Go2 — Ready!"
+echo "  Isaac Navigation Sim — 就绪!"
 echo "============================================"
 echo ""
-echo "  Controls:"
-echo "    W/S — Forward/Backward"
-echo "    A/D — Strafe Left/Right"
-echo "    Q/E — Turn Left/Right"
-echo "    R   — Reset robot"
-echo "    Space — Emergency stop"
-echo "    Ctrl+C — Quit and stop all"
+ROBOT_DISPLAY="${ROBOT_TYPE:-config.yaml 中的配置}"
+echo "  机器人: $ROBOT_DISPLAY"
+echo "  场景: $DATASET_DIR"
 echo ""
-echo "  Make sure this terminal has keyboard focus!"
+echo "  控制:"
+echo "    W/S — 前进/后退"
+echo "    A/D — 左/右平移"
+echo "    Q/E — 左转/右转"
+echo "    R   — 重置机器人"
+echo "    Space — 紧急停止"
+echo "    Ctrl+C — 退出并停止所有"
+echo ""
+echo "  确保此终端有键盘焦点!"
 echo "============================================"
 echo ""
 
-# Start teleop in foreground (Ctrl+C triggers cleanup)
+# 启动 teleop (前台, Ctrl+C 触发清理)
 docker exec -it "$ROS_CONTAINER" bash -c \
-    "source /catkin_ws/devel/setup.bash && rosrun nav_demo teleop_keyboard.py _linear_speed:=3.0 _lateral_speed:=2.0 _angular_speed:=3.0"
+    "source /catkin_ws/devel/setup.bash && rosrun nav_demo teleop_keyboard.py _linear_speed:=1.5 _lateral_speed:=1.0 _angular_speed:=1.5"

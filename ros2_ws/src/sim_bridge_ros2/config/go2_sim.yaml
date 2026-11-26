@@ -1,0 +1,37 @@
+# Go2 + ODIN1 simulation profile for ONS2 navigation (ROS2 runtime).
+# frame_layout=odin: sim owns map->odom and odom->imu (sensor pose);
+# the ONS2 launch owns imu->odin1_base_link->base_link.
+
+frame_layout: odin
+publish_odin1_aliases: true
+
+map_frame: map
+odom_frame: odom
+base_frame: base_link
+footprint_frame: base_footprint
+sensor_base_frame: odin1_base_link
+imu_frame: imu
+lidar_frame: lidar1
+camera_frame: camera1
+
+base_height: 0.32
+sensor_base_offset_xyz: [0.313012319746, -0.024932621673, 0.085963432621]
+sensor_base_rotation_xyzw: [-0.008260020031, -0.002110005117, -0.004740011495, 0.999952424988]
+camera_offset_xyz: [0.323186677884, 0.006460829226, 0.103573905276]
+imu_offset_xyz: [0.313012319746, -0.024932621673, 0.085963432621]
+
+tcp_host: localhost
+tcp_port: 9090
+reconnect_interval: 2.0
+poll_rate_hz: 200.0
+
+impair:
+  enable: false
+  profile: real
+
+publish_image: true
+# Project the latest camera frame onto cloud_slam (LUT stays as fallback).
+camera_color: true
+camera_color_max_age: 0.6
+# Source-PCD colors are ~2x darker than camera samples; 0.5 matches medians.
+lut_gamma: 0.5

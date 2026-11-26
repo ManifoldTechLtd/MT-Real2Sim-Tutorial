@@ -20,7 +20,6 @@ import tty
 
 import rospy
 from geometry_msgs.msg import Twist
-from std_msgs.msg import Empty
 
 HELP_TEXT = """
 ========================================
@@ -29,7 +28,6 @@ HELP_TEXT = """
   W/S  : forward / backward
   A/D  : strafe left / right
   Q/E  : turn left / right
-  R    : reset robot position
   Space: emergency stop (zero velocity)
   Ctrl+C: quit
 ----------------------------------------
@@ -65,11 +63,24 @@ def get_key_nonblocking(timeout=0.1):
     return ch
 
 
+def other_velocity_publisher():
+    """Yield command ownership while an automatic controller publishes."""
+    try:
+        code, _, state = rospy.get_master().getSystemState()
+        if code != 1:
+            return True
+        topic = rospy.resolve_name('/cmd_vel')
+        return any(name != rospy.get_name() for channel, names in state[0]
+                   if channel == topic for name in names)
+    except Exception as exc:
+        rospy.logwarn_throttle(5, 'Cannot check velocity ownership: %s', exc)
+        return True
+
+
 def main():
     rospy.init_node("teleop_keyboard")
 
     pub = rospy.Publisher("/cmd_vel", Twist, queue_size=1)
-    reset_pub = rospy.Publisher("/reset_robot", Empty, queue_size=1)
 
     linear_speed = rospy.get_param("~linear_speed", 1.0)
     lateral_speed = rospy.get_param("~lateral_speed", 1.0)
@@ -90,17 +101,18 @@ def main():
             if key == '\x03':  # Ctrl+C
                 break
 
+            if other_velocity_publisher():
+                cur_vx = cur_vy = cur_wz = 0.0
+                rospy.logwarn_throttle(5, 'Automatic velocity publisher active; keyboard control paused')
+                rate.sleep()
+                continue
+
             if key:
-                if key.lower() == 'r':
-                    reset_pub.publish(Empty())
-                    cur_vx, cur_vy, cur_wz = 0.0, 0.0, 0.0
-                    print("\n[RESET] Robot position reset requested")
-                else:
-                    binding = BINDINGS.get(key.lower())
-                    if binding is not None:
-                        cur_vx = binding[0] * linear_speed
-                        cur_vy = binding[1] * lateral_speed
-                        cur_wz = binding[2] * angular_speed
+                binding = BINDINGS.get(key.lower())
+                if binding is not None:
+                    cur_vx = binding[0] * linear_speed
+                    cur_vy = binding[1] * lateral_speed
+                    cur_wz = binding[2] * angular_speed
 
             # 持续发布当前速度
             twist = Twist()
@@ -118,7 +130,8 @@ def main():
         pass
     finally:
         # 发送停止指令
-        pub.publish(Twist())
+        if not other_velocity_publisher():
+            pub.publish(Twist())
         print("\nStopped.")
 
 

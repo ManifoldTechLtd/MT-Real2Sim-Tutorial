@@ -77,15 +77,14 @@ def create_environment(world, cfg: dict, physics_cfg: dict = None):
       contact_offset:          碰撞检测提前量 (m, 默认 PhysX 内部值)
       rest_offset:             接触静息偏移 (m, 默认 PhysX 内部值)
     """
-    from pxr import Usd, UsdGeom, UsdPhysics, Gf
+    from pxr import Usd, UsdGeom, UsdPhysics, Gf, Sdf
 
     if physics_cfg is None:
         physics_cfg = {}
 
     usdz_path = os.path.expanduser(cfg["usdz_path"])
     if not os.path.isfile(usdz_path):
-        print(f"[scene_builder] WARN: USDZ 文件不存在, 跳过环境加载并回退到默认地面: {usdz_path}")
-        return False
+        raise FileNotFoundError(f"USDZ 文件不存在: {usdz_path}")
 
     stage = world.stage
 
@@ -119,13 +118,23 @@ def create_environment(world, cfg: dict, physics_cfg: dict = None):
 
     # 修复 USDZ prim 属性：可见性 + mesh 碰撞 / 渲染属性
     mesh_count = 0
+    keep_collision_invisible = bool(cfg.get("keep_invisible_collision_meshes", False))
+    hidden_proxies = {
+        prim.GetPath() for prim in Usd.PrimRange(env_prim)
+        if keep_collision_invisible and prim.IsA(UsdGeom.Mesh)
+        and prim.HasAPI(UsdPhysics.CollisionAPI)
+        and UsdGeom.Imageable(prim).ComputeVisibility() == "invisible"
+    }
     for prim in Usd.PrimRange(env_prim):
         img = UsdGeom.Imageable(prim)
-        # 确保所有 prim 对渲染管线可见（2DGS 导出的 USDZ 可能标记 mesh 为 invisible）
         if img.ComputeVisibility() == "invisible":
             img.MakeVisible()
 
         if prim.IsA(UsdGeom.Mesh):
+            if prim.GetPath() in hidden_proxies:
+                # USD invisibility also removes RTX hits; hide only primary camera rays.
+                UsdGeom.PrimvarsAPI(prim).CreatePrimvar(
+                    "hideForCamera", Sdf.ValueTypeNames.Bool).Set(True)
             mesh = UsdGeom.Mesh(prim)
             # 设置双面渲染，使深度 pass 在 mesh 内侧也能命中
             mesh.CreateDoubleSidedAttr(True)

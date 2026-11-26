@@ -1,0 +1,158 @@
+# Isaac Navigation Sim - 双容器编排
+# Isaac Sim 5.1 + ROS1 Noetic
+#
+# 用法:
+#   ./start.sh                    # 启动 (默认 kinematic_car)
+#   ./start.sh --robot spot       # 启动 spot
+#   ./start.sh --robot go2        # 启动 go2
+#   ./start.sh --stop             # 停止
+
+version: "3.8"
+
+services:
+  isaac-sim:
+    image: r2s2r-isaac:5.1.0  # 使用 MT 的镜像
+    container_name: isaac_nav_isaac
+    user: root
+    network_mode: host
+    ipc: host
+    stdin_open: true
+    tty: true
+
+    # Allow opt-in hang diagnostics to attach to the simulator.
+    cap_add:
+      - SYS_PTRACE
+
+    environment:
+      - ACCEPT_EULA=Y
+      - PRIVACY_CONSENT=Y
+      - DISPLAY=${DISPLAY}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - QT_X11_NO_MITSHM=1
+      - XAUTHORITY=/root/.Xauthority
+      # 环境变量覆盖（通过start.sh传入）
+      - ROBOT_TYPE=${ROBOT_TYPE:-kinematic_car}
+      - SCENE_PATH=${SCENE_PATH:-}
+      - SIM_CONFIG=${SIM_CONFIG:-r2s2r/configs/config.yaml}
+      - PHYSX_GPU_DYNAMICS=${PHYSX_GPU_DYNAMICS:-}
+      - PHYSX_DEVICE=${PHYSX_DEVICE:-}
+      - COLLISION_APPROX=${COLLISION_APPROX:-meshSimplification}
+      - CONTACT_OFFSET=${CONTACT_OFFSET:-}
+      - GPU_MAX_PARTITIONS=${GPU_MAX_PARTITIONS:-}
+
+    working_dir: /workspace
+
+    volumes:
+      # 项目代码
+      - ../r2s2r:/workspace/r2s2r:ro
+      - ../lidar_configs:/workspace/lidar_configs:ro
+      # 启动脚本
+      - ./entrypoint_isaac.sh:/entrypoint_isaac.sh:ro
+      # 场景文件
+      - ${DATASET_DIR:-../dataset}:/dataset:ro
+      # X11 GUI
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${HOME}/.Xauthority:/root/.Xauthority:ro
+      # Isaac Sim 缓存（使用 named volumes，与 MT 一致）
+      - isaac-cache:/isaac-sim/.cache
+      - isaac-computecache:/isaac-sim/.nv/ComputeCache
+      - isaac-logs:/isaac-sim/.nvidia-omniverse/logs
+      - isaac-config:/isaac-sim/.nvidia-omniverse/config
+      - isaac-data:/isaac-sim/.local/share/ov/data
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    # 启动后执行仿真
+    entrypoint: ["/bin/bash"]
+    command: ["/entrypoint_isaac.sh"]
+
+  ros2:
+    build:
+      context: .
+      dockerfile: Dockerfile.ros2
+    image: isaac_nav_ros2:jazzy
+    container_name: isaac_nav_ros2
+    network_mode: host
+    ipc: host
+    stdin_open: true
+    tty: true
+
+    environment:
+      - DISPLAY=${DISPLAY}
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-77}
+      - XDG_RUNTIME_DIR=/tmp/runtime-root
+      - QT_X11_NO_MITSHM=1
+      - XAUTHORITY=/root/.Xauthority
+
+    volumes:
+      # ONS2 checkout (nav stack) and the sim-side ROS2 bridge workspace
+      - ${ONS2_ROOT:-../Odin-Nav-Stack2}:/ons2
+      - ../ros2_ws/src/sim_bridge_ros2:/ons2/ros2_ws/src/sim_bridge_ros2:ro
+      - ../integrations:/integrations:ro
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${HOME}/.Xauthority:/root/.Xauthority:ro
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    command: ["bash", "-c", "sleep infinity"]
+
+  ros1:
+    build:
+      context: .
+      dockerfile: Dockerfile.ros1
+    image: isaac_nav_ros1:noetic
+    container_name: isaac_nav_ros1
+    network_mode: host
+    privileged: true
+    ipc: host
+    stdin_open: true
+    tty: true
+
+    environment:
+      - DISPLAY=${DISPLAY}
+      - ROS_MASTER_URI=http://localhost:11311
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - QT_X11_NO_MITSHM=1
+      - XDG_RUNTIME_DIR=/tmp/runtime-root
+      - LIBGL_ALWAYS_INDIRECT=0
+      - XAUTHORITY=/root/.Xauthority
+
+    volumes:
+      - ../ros1_ws/src:/catkin_ws/src
+      - ../tools:/tools:ro
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${HOME}/.Xauthority:/root/.Xauthority:ro
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    # 启动后等待，由start.sh在内部启动ROS节点
+    command: ["bash", "-c", "source /catkin_ws/devel/setup.bash && sleep infinity"]
+
+# Named volumes for Isaac Sim cache
+volumes:
+  isaac-cache:
+  isaac-computecache:
+  isaac-logs:
+  isaac-config:
+  isaac-data:
+

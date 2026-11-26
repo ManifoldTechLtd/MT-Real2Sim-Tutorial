@@ -1,0 +1,91 @@
+# ========================================
+# Isaac Real2Sim2Real — 运动学差速车 (K02 履带车仿真)
+# ========================================
+# 用途: 验证导航算法 (path_detect / scan_filter / NeuPAN / map_planner) 端到端.
+# 不模拟轮地物理, 直接积分 cmd_vel -> base pose + raycast 跟地形.
+
+simulation:
+  headless: false
+  width: 1280
+  height: 720
+  renderer: "RayTracedLighting"
+  render_opt:
+    enabled: true
+    reflections: false
+    translucency: false
+    indirect_diffuse: false
+    shadows: false
+    ambient_occlusion: false
+
+scene:
+  environment:
+    enabled: true
+    usdz_path: "/path/to/dataset/tunnel1.usdz"
+    position: [0.0, 0.0, 0.0]
+    orientation: [0.0, 0.0, 0.0]
+    scale: [1.0, 1.0, 1.0]
+    add_collision: true
+
+  use_default_ground: false
+  ground_z_offset: 0.0
+
+  # 物理碰撞: 仅环境 mesh 用, 用于 raycast 命中地形.
+  physics:
+    collision_approximation: "meshSimplification"
+    contact_offset: 0.08
+    rest_offset: 0.01
+
+# 运动学车: 不需要 RL policy, 任意地形都能通过.
+quadruped:                       # 保留键名 (与 spot/go2 一致, 便于 run_sim 解析)
+  robot_type: "kinematic_car"
+  prim_path: "/World/Quadruped"
+  position: [-10.0, -60.0, 0.20]   # 起点 (x, y, z), z 是 base_link 离地高度起步, initialize 时 raycast 会覆盖
+
+# 履带车几何 / 运动学参数
+kinematic_car:
+  size: [1.04, 0.77, 0.30]            # K02: length, width, height (m)
+  base_link_z_above_ground: 0.20      # base_link 几何中心距地高度 (m)
+  raycast_max_dist: 20.0              # raycast 最大射程 (m)
+  visual_color: [0.85, 0.55, 0.10]    # 橙色, 仿真里好辨认
+  ignore_lateral: true                # 履带车 vy 强制 = 0
+  debug_terrain: false                 # 打印地形拟合 debug (1Hz 成功 / 每帧失败), 调好后关
+
+  # RTX Lidar 自身回波过滤 (履带车专用).
+  # chassis_visual 是 UsdGeom.Cube (size=1.04×0.77×0.30, 无 collider), 仅作可视化;
+  # 但 RTX Lidar 用渲染几何做光追, 会把 chassis 角点 (距 lidar ~0.65m, 略大于
+  # nearRangeM=0.5) 当障碍报回. 在 lidar 局部系 (lidar 在 base_link 上方 0.30m)
+  # 内, chassis bbox 为 x∈±0.52, y∈±0.385, z∈[-0.45,-0.15]. 加 ~5cm 安全余量
+  # 后整盒过滤, pose-invariant (chassis/lidar 同挂 base_link).
+  lidar_self_filter:
+    enable: true
+    x_half: 0.60                       # |x| < x_half (lidar local, 单位 m)
+    y_half: 0.45                       # |y| < y_half
+    z_min: -0.55                       # z_min < z < z_max
+    z_max: -0.10
+
+lighting:
+  dome_intensity: 1000.0
+  distant_intensity: 800.0
+  distant_rotation: [-80, 0, 0]
+
+# 传感器套件: 使用 kinematic_car 专用 calibration (mount.z=0 使 lidar 距地 0.5m)
+sensor_suite:
+  enabled: true
+  calibration_dir: "calibration/kinematic_car"
+
+# TCP 桥接
+bridge:
+  host: "0.0.0.0"
+  port: 9090
+  pose_rate: 50
+  pointcloud_rate: 5
+  image_rate: 10
+  image_quality: 80
+  imu_rate: 50
+
+# 手动控制 (WASD)
+# 履带车实测速度 ~1.5m/s, 这里调高便于调试. NeuPAN 实际给出的 cmd_vel 不会受这影响.
+control:
+  linear_speed: 1.5
+  lateral_speed: 0.0            # vy 在 KinematicVehicle 里被强制忽略, 此处冗余设 0
+  yaw_speed: 1.5

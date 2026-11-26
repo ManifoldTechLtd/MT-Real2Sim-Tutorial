@@ -30,7 +30,8 @@ MSG_POINTCLOUD = 0x02  # Isaac → ROS1: LiDAR 点云
 MSG_CMD_VEL = 0x03     # ROS1 → Isaac: 速度指令
 MSG_IMAGE = 0x04       # Isaac → ROS1: Camera 图像 (JPEG 压缩)
 MSG_IMU = 0x05         # Isaac → ROS1: IMU 数据
-MSG_RESET = 0x06       # ROS1 → Isaac: 重置机器人位置
+MSG_CLOCK = 0x06       # Isaac → ROS1: simulation time in seconds
+MSG_RESET = 0x30       # ROS1 → Isaac: 复位请求 (to_start 或 原地恢复)
 
 MSG_TYPE_NAMES = {
     MSG_POSE: "POSE",
@@ -38,6 +39,7 @@ MSG_TYPE_NAMES = {
     MSG_CMD_VEL: "CMD_VEL",
     MSG_IMAGE: "IMAGE",
     MSG_IMU: "IMU",
+    MSG_CLOCK: "CLOCK",
     MSG_RESET: "RESET",
 }
 
@@ -51,6 +53,11 @@ def encode_message(msg_type: int, payload: dict) -> bytes:
     payload_bytes = msgpack.packb(payload, use_bin_type=True)
     header = struct.pack(HEADER_FMT, MAGIC, msg_type, len(payload_bytes))
     return header + payload_bytes
+
+
+def encode_clock(timestamp: float) -> bytes:
+    """Encode the simulation clock independently of sensor publication rates."""
+    return encode_message(MSG_CLOCK, {"ts": float(timestamp)})
 
 
 def encode_pose(x, y, z, qx, qy, qz, qw,
@@ -71,7 +78,7 @@ def encode_pose(x, y, z, qx, qy, qz, qw,
 
 
 def encode_pointcloud(xyz: np.ndarray, frame_id: str = "sensor",
-                      timestamp=None) -> bytes:
+                      timestamp=None, body_pose=None) -> bytes:
     """编码 POINTCLOUD 消息
     Args:
         xyz: ndarray (N, 3), float32 点云
@@ -87,6 +94,9 @@ def encode_pointcloud(xyz: np.ndarray, frame_id: str = "sensor",
         "n_points": int(xyz_f32.shape[0]),
         "xyz": xyz_f32.tobytes(),
     }
+    if body_pose is not None:
+        # Measured body pose in map, xyz + xyzw, synchronized with this scan.
+        payload['body_pose'] = [float(v) for v in body_pose]
     return encode_message(MSG_POINTCLOUD, payload)
 
 
@@ -96,14 +106,26 @@ def encode_cmd_vel(vx: float, vy: float, wz: float) -> bytes:
     return encode_message(MSG_CMD_VEL, payload)
 
 
+def encode_reset(to_start: bool = True) -> bytes:
+    """编码 RESET 消息
+    Args:
+        to_start: True = 回 config 起点 (yaw=0); False = 原地恢复 (保留 xy/yaw, 清 roll/pitch)
+    """
+    payload = {"to_start": bool(to_start)}
+    return encode_message(MSG_RESET, payload)
+
+
 def encode_image(rgb: np.ndarray, frame_id: str = "camera",
-                 quality: int = 80, timestamp=None) -> bytes:
+                 quality: int = 80, timestamp=None,
+                 intrinsics: dict = None, body_to_camera=None) -> bytes:
     """编码 IMAGE 消息 (JPEG 压缩)
     Args:
         rgb: ndarray (H, W, 3), uint8 RGB 图像
         frame_id: 坐标系名称
         quality: JPEG 压缩质量 (1-100)
         timestamp: 时间戳
+        intrinsics: 相机内参 (与渲染器一致), 可选
+        body_to_camera: (xyz, quat_xyzw) T_body_camera, 可选
     """
     import cv2
     if timestamp is None:
@@ -120,6 +142,17 @@ def encode_image(rgb: np.ndarray, frame_id: str = "camera",
         "encoding": "jpeg",
         "data": jpeg_buf.tobytes(),
     }
+    if intrinsics is not None:
+        payload["intrinsics"] = {
+            k: (int(v) if k in ('width', 'height') else float(v))
+            for k, v in intrinsics.items()
+            if k in ('fx', 'fy', 'cx', 'cy', 'width', 'height')}
+    if body_to_camera is not None:
+        xyz, quat = body_to_camera
+        payload["body_to_camera"] = {
+            "xyz": [float(v) for v in xyz],
+            "quat_xyzw": [float(v) for v in quat],
+        }
     return encode_message(MSG_IMAGE, payload)
 
 
