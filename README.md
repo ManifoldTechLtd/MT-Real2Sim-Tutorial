@@ -4,6 +4,8 @@ English | [简体中文](README.zh-CN.md)
 
 An Isaac Sim 5.1 simulation ↔ ROS1 Noetic unified navigation algorithm framework. It supports three robot types for simulation testing and real-robot deployment validation of navigation algorithms.
 
+> **Which branch should I use?** Use **`master`** — it always holds the released, verified simulation stack. **`v2` is our active development branch** and may contain unreleased changes; pull it only if you are contributing.
+
 ## Features
 
 - **Three robot types**: kinematic_car (kinematic tracked vehicle), Spot, Go2
