@@ -50,3 +50,6 @@ hang_logs/
 
 # scene-specific LiDAR color LUTs (generated)
 integrations/ons2/color_luts/*.npz
+
+# 运行时生成的 FishPoly LUT 缓存（按标定参数哈希命名，首次运行自动重建）
+r2s2r/configs/calibration/odin1/.lut_cache/
