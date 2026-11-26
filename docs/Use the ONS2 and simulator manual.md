@@ -440,6 +440,17 @@ Expand the `/odin1/cloud_slam` settings:
 - choose **BGR (packed)** as the color mode;
 - choose **`rgb`** as the color field; do not leave it on "distance (automatic)".
 
+### Camera view and recording
+
+The viewport camera menu (top-left camera icon → **Cameras**) contains the robot's front
+sensor camera **camera1**. It follows the head, produces `/odin1/image/compressed`
+(800x648), and is the image used for point-cloud coloring. This is the normal moving view.
+
+For screen recording, choose **camera1** for the robot's front view and use a separate
+panel for the map and point cloud.
+
+`camera1` is the sensor used for coloring; it does not affect navigation or waypoints.
+
 ### Verification
 
 ```bash
